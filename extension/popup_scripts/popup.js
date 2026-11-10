@@ -658,10 +658,10 @@ function handleInstagramSortClick(sort_by) {
   const no_reels_selected_input = document.getElementById("no_reels_selected");
   const datesSelected = document.getElementById("dates_selected");
 
-  // Outlier scoring runs ONLY when the user sorts by Outlier score — every other
+  // Outlier scoring runs ONLY when the user sorts by Outlier score or Velocity — every other
   // sort skips the baseline collection entirely (so badges + the Sort-by/Filters
-  // outlier entries appear only on an outlier sort).
-  const outlier_scores = sort_by === "outlier";
+  // outlier entries appear only on an outlier/velocity sort).
+  const outlier_scores = sort_by === "outlier" || sort_by === "velocity";
 
   if (DBUG) console.log("[Insta] Sort click:", sort_by, { outlier_scores });
 
@@ -693,9 +693,13 @@ function handleInstagramSortClick(sort_by) {
 }
 
 document.getElementById("sortViewsClick")?.addEventListener("click", () => handleInstagramSortClick("views"));
+document.getElementById("sortVelocityClick")?.addEventListener("click", () => handleInstagramSortClick("velocity"));
 document.getElementById("sortLikesClick")?.addEventListener("click", () => handleInstagramSortClick("likes"));
 document.getElementById("sortCommentsClick")?.addEventListener("click", () => handleInstagramSortClick("comments"));
 document.getElementById("sortOldestClicks")?.addEventListener("click", () => handleInstagramSortClick("oldest"));
+document.getElementById("openViralSpyStudioBtn")?.addEventListener("click", () => {
+  chrome.tabs.create({ url: "http://127.0.0.1:8765/dashboard" });
+});
 
 ////////////////////////////////////////////////////////////////////////////////
 // YouTube sort clicks — Phase 0.5 (gating only)

@@ -109,6 +109,11 @@
     row.audioUrl = bestAudio(m);
     row.mediaId = m?.pk != null ? String(m.pk) : (row.reelID != null ? String(row.reelID) : (row.postID != null ? String(row.postID) : null));
     row.videoDuration = m?.video_duration ?? null;
+    const createdMs = row.createDate ? Date.parse(row.createDate) : NaN;
+    const ageHours = Number.isFinite(createdMs) ? Math.max(0.5, (Date.now() - createdMs) / 3600000) : null;
+    row.ageHours = ageHours != null ? Number(ageHours.toFixed(2)) : null;
+    const metricVal = row.viewCount ?? row.likesCount ?? null;
+    row.viewsPerHour = ageHours != null && metricVal != null ? Number((+metricVal / ageHours).toFixed(2)) : null;
     return hideLikes(m, row);
   };
 
@@ -824,8 +829,8 @@
       ? (["likes", "oldest"].includes(job.sortBy) ? job.sortBy : "likes")               // Saved: no comment counts either
       : isCollection
       ? (["likes", "comments", "oldest"].includes(job.sortBy) ? job.sortBy : "likes")   // collections do carry comment counts
-      : ["views", "likes", "comments", "oldest", "outlier"].includes(job.sortBy) ? job.sortBy : (S.metricKey === "likesCount" ? "likes" : "views");
-    const outlierMode = isSearch || isSaved || isCollection ? "off" : job.outlier === "off" ? "off" : job.outlier === "on" || sortBy === "outlier" ? "on" : "auto";
+      : ["views", "likes", "comments", "oldest", "outlier", "velocity"].includes(job.sortBy) ? job.sortBy : (S.metricKey === "likesCount" ? "likes" : "views");
+    const outlierMode = isSearch || isSaved || isCollection ? "off" : job.outlier === "off" ? "off" : job.outlier === "on" || sortBy === "outlier" || sortBy === "velocity" ? "on" : "auto";
     const gap = makePacer();
     let requests = 0;
 
@@ -927,13 +932,21 @@
         }
         meta = stopped ? { status: "cancelled", baseline: null, poolSize: 0, metric } : outlierComputeMeta(pool, metric);
         if (outlierMode === "auto" && meta.status === "insufficient" && hasNext) meta = { status: "not_computed", baseline: null, poolSize: meta.poolSize, metric };
-        if (meta.status === "ok") rows.forEach((it) => { it.outlierScore = it[S.metricKey] != null ? +it[S.metricKey] / meta.baseline : null; });
+        if (meta.status === "ok") {
+          rows.forEach((it) => {
+            it.outlierScore = it[S.metricKey] != null ? +it[S.metricKey] / meta.baseline : null;
+            if (it.viewsPerHour != null && meta.baseline > 0) {
+              it.velocityScore = Number(((it.viewsPerHour * 24) / meta.baseline).toFixed(2));
+            }
+          });
+        }
       }
 
       // Sort
       let sorted;
       if (isSearch) { sorted = typeof sfExploreSortItems === "function" ? sfExploreSortItems(rows, sortBy) : sortSearch(rows, sortBy); }   // result order isn't chronological, so "oldest" sorts by date
       else if (isSaved || isCollection) { sorted = typeof sfSavedSortItems === "function" ? sfSavedSortItems(rows, sortBy) : sortSearch(rows, sortBy); }   // saved order is "recently saved", so "oldest" sorts by date too
+      else if (sortBy === "velocity") { sorted = [...rows].sort((a, b) => ((b.velocityScore ?? b.viewsPerHour) || 0) - ((a.velocityScore ?? a.viewsPerHour) || 0)); }
       else if (sortBy === "outlier") { const fb = S.metricKey; sorted = [...rows].sort((a, b) => ((b.outlierScore ?? b[fb]) || 0) - ((a.outlierScore ?? a[fb]) || 0)); }
       else if (typeof sort_items === "function" && Array.isArray((sorted = sort_items(rows, sortBy)))) { /* extension sort */ }
       else { const k = { views: "viewCount", likes: "likesCount", comments: "commentsCount" }[sortBy]; sorted = sortBy === "oldest" ? [...rows].reverse() : [...rows].sort((a, b) => (b[k] ?? 0) - (a[k] ?? 0)); }

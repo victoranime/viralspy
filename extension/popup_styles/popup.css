@@ -2929,6 +2929,39 @@ body:not(.sf-feature-banner-open) .TikTokMain.sf-outlier-on .sf-sort-card .SortB
 .sf-header-right {
   display: flex;
   align-items: center;
+  gap: 5px;
+}
+
+.sf-studio-pill {
+  appearance: none;
+  border: 1px solid rgba(0, 0, 0, 0.09);
+  background: #1d1d1f;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.12s ease;
+}
+
+.sf-studio-pill:hover {
+  background: #000000;
+  transform: translateY(-0.5px);
+}
+
+.sf-velocity-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  margin-right: 10px;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.72;
 }
 
 /* ── Gear button ── */

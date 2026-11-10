@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ViralSpy Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/dashboard/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Left Navigation Rail -->
+    <aside class="sidebar">
+      <div class="brand-row">
+        <div class="brand-mark">
+          <img src="/logo.svg" alt="ViralSpy" class="brand-logo" />
+          <div class="brand-copy">
+            <span class="brand-name">ViralSpy</span>
+            <span class="brand-tag">Studio</span>
+          </div>
+        </div>
+        <button id="themeToggleBtn" class="icon-btn" type="button" title="Switch theme" aria-label="Switch theme">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+          </svg>
+        </button>
+      </div>
+
+      <nav class="nav-group" aria-label="Primary">
+        <button class="nav-item is-active" data-view="spy" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <circle cx="11" cy="11" r="7"></circle>
+            <path d="m20 20-3.5-3.5"></path>
+          </svg>
+          <span>Creator Spy</span>
+        </button>
+
+        <button class="nav-item" data-view="radar" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <circle cx="12" cy="12" r="9"></circle>
+            <circle cx="12" cy="12" r="5"></circle>
+            <circle cx="12" cy="12" r="1.5" fill="currentColor"></circle>
+            <path d="M12 12 18.3 5.7"></path>
+          </svg>
+          <span>Niche Radar</span>
+          <span class="nav-pill">Multi</span>
+        </button>
+
+        <button class="nav-item" data-view="comments" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+          </svg>
+          <span>Comment Goldmine</span>
+        </button>
+
+        <button class="nav-item" data-view="vault" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path>
+          </svg>
+          <span>Swipe Vault</span>
+          <span id="vaultCountBadge" class="nav-count">0</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-head">
+          <span>Recent Scans</span>
+        </div>
+        <div id="recentScansList" class="recent-scans-list">
+          <div class="empty-hint">No profiles scanned yet</div>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="engine-card">
+          <div class="engine-row">
+            <span id="extDot" class="status-dot is-offline"></span>
+            <div class="engine-meta">
+              <span id="extStatusTitle" class="engine-title">Checking Chrome…</span>
+              <span id="extStatusSub" class="engine-sub">ws://127.0.0.1:8765/ext</span>
+            </div>
+            <button id="focusChromeBtn" class="mini-pill-btn" type="button" title="Focus ViralSpy tab in Chrome">Tab ↗</button>
+          </div>
+          <div class="engine-divider"></div>
+          <div class="engine-chips">
+            <span id="whisperChip" class="engine-chip">Whisper GPU</span>
+            <span id="visionChip" class="engine-chip">Vision OCR</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace -->
+    <main class="workspace">
+      <!-- Live Progress Banner -->
+      <div id="globalJobBanner" class="job-banner" hidden>
+        <div class="job-spinner"></div>
+        <span id="globalJobText">Scanning profile in Chrome…</span>
+      </div>
+
+      <!-- VIEW 1: CREATOR SPY -->
+      <section id="view-spy" class="view-panel is-active">
+        <header class="view-header">
+          <div>
+            <h1 class="view-title">Creator Spy</h1>
+            <p class="view-subtitle">Rank any creator's feed by Outlier breakout, 24h Velocity, or raw engagement.</p>
+          </div>
+          <div class="header-actions" id="spyExportActions" hidden>
+            <button id="discoverSimilarBtn" class="btn-secondary" type="button">Similar Creators</button>
+            <button id="exportCsvBtn" class="btn-secondary" type="button">Export CSV</button>
+            <button id="exportJsonBtn" class="btn-secondary" type="button">Export JSON</button>
+          </div>
+        </header>
+
+        <!-- Control Bar -->
+        <form id="spyForm" class="control-card">
+          <div class="control-top-row">
+            <div class="seg-group" id="platformSeg" role="radiogroup" aria-label="Platform">
+              <button type="button" class="seg-btn is-active" data-platform="instagram">Instagram</button>
+              <button type="button" class="seg-btn" data-platform="tiktok">TikTok</button>
+              <button type="button" class="seg-btn" data-platform="youtube">YouTube</button>
+            </div>
+
+            <div class="input-handle-wrap">
+              <span class="input-prefix">@</span>
+              <input id="spyUsernameInput" type="text" placeholder="andre_gizmo" autocomplete="off" required />
+            </div>
+
+            <select id="spySurfaceSelect" class="apple-select" aria-label="Surface">
+              <option value="reels">Reels</option>
+              <option value="posts">Posts</option>
+            </select>
+
+            <select id="spyDepthSelect" class="apple-select" aria-label="Scan depth">
+              <option value="30">Latest 30</option>
+              <option value="60" selected>Latest 60</option>
+              <option value="120">Latest 120</option>
+              <option value="250">Latest 250</option>
+            </select>
+
+            <button id="spySubmitBtn" type="submit" class="btn-primary">
+              <span>Analyze Feed</span>
+            </button>
+          </div>
+
+          <div class="control-bottom-row">
+            <div class="sort-pills-wrap">
+              <span class="control-label">Sort by</span>
+              <div class="seg-group seg-group-compact" id="spySortSeg">
+                <button type="button" class="seg-btn is-active" data-sort="outlier">Outlier Score</button>
+                <button type="button" class="seg-btn" data-sort="velocity">Velocity ⚡</button>
+                <button type="button" class="seg-btn" data-sort="views">Views</button>
+                <button type="button" class="seg-btn" data-sort="likes">Likes</button>
+                <button type="button" class="seg-btn" data-sort="comments">Comments</button>
+              </div>
+            </div>
+
+            <div class="quick-filter-wrap">
+              <input id="spyFilterInput" type="search" class="filter-search-input" placeholder="Filter captions…" />
+            </div>
+          </div>
+        </form>
+
+        <!-- Similar Accounts Strip (collapsible) -->
+        <div id="similarStrip" class="similar-strip" hidden>
+          <div class="similar-strip-head">
+            <span id="similarStripTitle">Similar creators</span>
+            <div class="similar-strip-actions">
+              <button id="sendSimilarToRadarBtn" type="button" class="btn-ghost-sm">Send top 6 to Niche Radar →</button>
+              <button id="closeSimilarStripBtn" type="button" class="btn-ghost-sm">Hide</button>
+            </div>
+          </div>
+          <div id="similarChipsRow" class="similar-chips-row"></div>
+        </div>
+
+        <!-- KPI Summary Strip -->
+        <div id="spyKpiGrid" class="kpi-grid" hidden>
+          <div class="kpi-card">
+            <span class="kpi-label">Creator</span>
+            <strong id="kpiCreator" class="kpi-value">@—</strong>
+            <span id="kpiScannedSub" class="kpi-sub">0 items scanned</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Median Baseline</span>
+            <strong id="kpiBaseline" class="kpi-value">—</strong>
+            <span class="kpi-sub">Usual performance</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Peak Outlier</span>
+            <strong id="kpiPeakOutlier" class="kpi-value accent-amber">—</strong>
+            <span id="kpiPeakOutlierSub" class="kpi-sub">Top breakout multiplier</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Top Velocity</span>
+            <strong id="kpiTopVelocity" class="kpi-value">—</strong>
+            <span class="kpi-sub">Fastest views / hour</span>
+          </div>
+        </div>
+
+        <!-- Results Grid -->
+        <div id="spyEmptyState" class="empty-stage">
+          <div class="empty-stage-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="3" y="3" width="7" height="10" rx="2"></rect>
+              <rect x="14" y="3" width="7" height="6" rx="2"></rect>
+              <rect x="14" y="13" width="7" height="8" rx="2"></rect>
+              <rect x="3" y="17" width="7" height="4" rx="2"></rect>
+            </svg>
+          </div>
+          <h2>Ready to inspect any creator</h2>
+          <p>Enter an Instagram, TikTok, or YouTube handle above to rank their highest-performing outliers, extract 3-frame visual hooks with OCR, and transcribe scripts locally.</p>
+          <div class="sample-chips">
+            <button type="button" class="sample-chip" data-sample="andre_gizmo">@andre_gizmo</button>
+          </div>
+        </div>
+
+        <div id="spyMediaGrid" class="media-grid"></div>
+      </section>
+
+      <!-- VIEW 2: NICHE RADAR -->
+      <section id="view-radar" class="view-panel">
+        <header class="view-header">
+          <div>
+            <h1 class="view-title">Niche Radar</h1>
+            <p class="view-subtitle">Scan multiple competitors together to surface what is breaking out across your entire market this week.</p>
+          </div>
+        </header>
+
+        <div class="control-card">
+          <div class="radar-seed-row">
+            <div class="radar-seed-left">
+              <span class="control-label">Auto-expand from 1 seed creator</span>
+              <div class="seed-inline">
+                <div class="input-handle-wrap compact">
+                  <span class="input-prefix">@</span>
+                  <input id="radarSeedInput" type="text" placeholder="andre_gizmo" autocomplete="off" />
+                </div>
+                <button id="radarExpandBtn" type="button" class="btn-secondary">Discover Competitors</button>
+              </div>
+            </div>
+
+            <div class="radar-window-right">
+              <span class="control-label">Time window</span>
+              <div class="seg-group seg-group-compact" id="radarWindowSeg">
+                <button type="button" class="seg-btn" data-days="7">7 Days</button>
+                <button type="button" class="seg-btn" data-days="14">14 Days</button>
+                <button type="button" class="seg-btn is-active" data-days="30">30 Days</button>
+                <button type="button" class="seg-btn" data-days="0">All Time</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="radarDiscoveredBox" class="radar-discovered-box" hidden>
+            <span class="control-label">Click to toggle discovered competitors:</span>
+            <div id="radarDiscoveredPills" class="similar-chips-row"></div>
+          </div>
+
+          <div class="radar-Editor-row">
+            <label for="radarAccountsTextarea" class="control-label">Competitor handles to scan (comma or space separated, up to 15)</label>
+            <textarea id="radarAccountsTextarea" rows="2" class="apple-textarea" placeholder="andre_gizmo, creator_two, creator_three"></textarea>
+          </div>
+
+          <div class="control-bottom-row">
+            <div class="sort-pills-wrap">
+              <span class="control-label">Rank leaderboard by</span>
+              <div class="seg-group seg-group-compact" id="radarSortSeg">
+                <button type="button" class="seg-btn is-active" data-sort="outlier">Outlier Multiplier</button>
+                <button type="button" class="seg-btn" data-sort="velocity">Velocity ⚡</button>
+                <button type="button" class="seg-btn" data-sort="views">Total Views</button>
+              </div>
+            </div>
+
+            <div class="radar-launch-wrap">
+              <select id="radarDepthSelect" class="apple-select">
+                <option value="24">24 Reels / account</option>
+                <option value="36" selected>36 Reels / account</option>
+                <option value="60">60 Reels / account</option>
+              </select>
+              <button id="runRadarBtn" type="button" class="btn-primary">Run Niche Radar</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="radarSummaryBar" class="radar-account-pills" hidden></div>
+        <div id="radarMediaGrid" class="media-grid"></div>
+      </section>
+
+      <!-- VIEW 3: COMMENT GOLDMINE -->
+      <section id="view-comments" class="view-panel">
+        <header class="view-header">
+          <div>
+            <h1 class="view-title">Comment Goldmine</h1>
+            <p class="view-subtitle">Extract audience questions, buying requests, and objections from any viral Instagram Reel.</p>
+          </div>
+        </header>
+
+        <form id="commentsForm" class="control-card">
+          <div class="control-top-row">
+            <input id="commentsUrlInput" type="text" class="apple-input-wide" placeholder="Paste Instagram Reel URL or shortcode (e.g. https://www.instagram.com/reel/ABC123/)" required />
+            <select id="commentsLimitSelect" class="apple-select">
+              <option value="50">Top 50 comments</option>
+              <option value="80" selected>Top 80 comments</option>
+              <option value="120">Top 120 comments</option>
+            </select>
+            <button type="submit" class="btn-primary">Mine Comments</button>
+          </div>
+        </form>
+
+        <div id="commentsResultsWrap" class="comments-columns" hidden>
+          <div class="comments-col">
+            <div class="comments-col-head">
+              <h3>Audience Questions</h3>
+              <span id="questionsCountBadge" class="pill-count">0</span>
+            </div>
+            <p class="comments-col-desc">Direct video topic ideas your market is asking for.</p>
+            <div id="questionsList" class="comment-cards-stack"></div>
+          </div>
+
+          <div class="comments-col">
+            <div class="comments-col-head">
+              <h3>Requests & Buying Signals</h3>
+              <span id="requestsCountBadge" class="pill-count">0</span>
+            </div>
+            <p class="comments-col-desc">Links, tutorials, recipes, products, and part-2 requests.</p>
+            <div id="requestsList" class="comment-cards-stack"></div>
+          </div>
+
+          <div class="comments-col">
+            <div class="comments-col-head">
+              <h3>Most Liked Comments</h3>
+              <span id="topCommentsCountBadge" class="pill-count">0</span>
+            </div>
+            <p class="comments-col-desc">Highest social-proof reactions sorted by comment likes.</p>
+            <div id="topCommentsList" class="comment-cards-stack"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 4: SWIPE VAULT -->
+      <section id="view-vault" class="view-panel">
+        <header class="view-header">
+          <div>
+            <h1 class="view-title">Swipe Vault</h1>
+            <p class="view-subtitle">Your saved outlier posts, local Whisper transcripts, and extracted 3-frame visual hooks.</p>
+          </div>
+          <div class="seg-group seg-group-compact" id="vaultTabSeg">
+            <button type="button" class="seg-btn is-active" data-vault="saved">Saved Posts</button>
+            <button type="button" class="seg-btn" data-vault="transcripts">Whisper Scripts</button>
+            <button type="button" class="seg-btn" data-vault="hooks">Visual Hooks</button>
+          </div>
+        </header>
+
+        <div id="vaultSavedGrid" class="media-grid"></div>
+        <div id="vaultTranscriptsList" class="vault-stack" hidden></div>
+        <div id="vaultHooksList" class="vault-stack" hidden></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Slide-Over Deep Inspector Drawer -->
+  <div id="inspectorBackdrop" class="drawer-backdrop" hidden></div>
+  <aside id="inspectorDrawer" class="inspector-drawer" aria-hidden="true">
+    <div class="drawer-header">
+      <div class="drawer-title-group">
+        <span id="drawerCreator" class="drawer-creator">@creator</span>
+        <div id="drawerBadges" class="drawer-badges"></div>
+      </div>
+      <div class="drawer-header-actions">
+        <a id="drawerExternalLink" href="#" target="_blank" rel="noopener noreferrer" class="btn-secondary btn-sm">Open Post ↗</a>
+        <a id="drawerDownloadMp4Btn" href="#" class="btn-primary btn-sm" hidden>Download MP4 ↓</a>
+        <button id="closeDrawerBtn" type="button" class="icon-btn" aria-label="Close inspector">✕</button>
+      </div>
+    </div>
+
+    <div class="drawer-body">
+      <!-- Video Preview & Metrics -->
+      <div class="drawer-media-row">
+        <div class="drawer-video-frame" id="drawerVideoWrap"></div>
+        <div class="drawer-stats-panel">
+          <div class="stat-mini-grid">
+            <div class="stat-mini">
+              <span>Views</span>
+              <strong id="drawerViews">—</strong>
+            </div>
+            <div class="stat-mini">
+              <span>Velocity</span>
+              <strong id="drawerVelocity">—</strong>
+            </div>
+            <div class="stat-mini">
+              <span>Likes</span>
+              <strong id="drawerLikes">—</strong>
+            </div>
+            <div class="stat-mini">
+              <span>Comments</span>
+              <strong id="drawerComments">—</strong>
+            </div>
+          </div>
+          <div class="drawer-caption-box">
+            <span class="section-eyebrow">Caption</span>
+            <p id="drawerCaption" class="drawer-caption-text"></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 1. Visual Hook (0s · 1.5s · 3s + Apple Vision OCR) -->
+      <div class="inspector-card">
+        <div class="inspector-card-head">
+          <div>
+            <h3>Visual Hook & On-Screen OCR</h3>
+            <p>First 3 seconds (`0.0s`, `1.5s`, `3.0s`) via local FFmpeg + Apple Vision</p>
+          </div>
+          <button id="extractHookBtn" type="button" class="btn-primary btn-sm">Extract 3 Frames + OCR</button>
+        </div>
+        <div id="visualHookResult" class="visual-hook-body" hidden>
+          <div id="onScreenOcrCallout" class="callout-box" hidden>
+            <div class="callout-head">
+              <span class="section-eyebrow">Detected On-Screen Hook Text</span>
+              <button id="copyOcrBtn" type="button" class="btn-ghost-xs">Copy</button>
+            </div>
+            <p id="onScreenOcrText" class="callout-quote"></p>
+          </div>
+          <div id="hookFramesGrid" class="hook-frames-grid"></div>
+        </div>
+      </div>
+
+      <!-- 2. Local Whisper Audio Transcript & Pacing -->
+      <div class="inspector-card">
+        <div class="inspector-card-head">
+          <div>
+            <h3>Spoken Hook & Full Script</h3>
+            <p>100% free local Whisper.cpp transcription on Apple Metal GPU</p>
+          </div>
+          <button id="transcribeReelBtn" type="button" class="btn-primary btn-sm">Transcribe Audio</button>
+        </div>
+        <div id="transcriptResult" class="transcript-body" hidden>
+          <div class="callout-box callout-spoken">
+            <div class="callout-head">
+              <span class="section-eyebrow">Spoken Hook (0 – 5s)</span>
+              <div class="pacing-pills">
+                <span id="scriptWpmPill" class="mini-tag">— WPM</span>
+                <button id="copyHookBtn" type="button" class="btn-ghost-xs">Copy Hook</button>
+              </div>
+            </div>
+            <p id="spokenHookText" class="callout-quote"></p>
+          </div>
+
+          <div class="full-script-head">
+            <span class="section-eyebrow">Timestamped Script (click any line to scrub video)</span>
+            <button id="copyFullScriptBtn" type="button" class="btn-ghost-xs">Copy Full Script</button>
+          </div>
+          <div id="transcriptSegments" class="segments-list"></div>
+        </div>
+      </div>
+
+      <!-- 3. Inline Comment Goldmine -->
+      <div class="inspector-card">
+        <div class="inspector-card-head">
+          <div>
+            <h3>Audience Questions & Comments</h3>
+            <p>Top-liked comments and unanswered questions under this post</p>
+          </div>
+          <button id="drawerMineCommentsBtn" type="button" class="btn-secondary btn-sm">Mine Comments</button>
+        </div>
+        <div id="drawerCommentsResult" class="drawer-comments-body" hidden></div>
+      </div>
+    </div>
+  </aside>
+
+  <div id="toastContainer" class="toast-container"></div>
+  <script src="/dashboard/app.js" type="module"></script>
+</body>
+</html>

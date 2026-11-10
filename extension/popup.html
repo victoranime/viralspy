@@ -30,6 +30,7 @@
         </div>
 
         <div class="sf-header-right">
+          <button type="button" id="openViralSpyStudioBtn" class="sf-studio-pill" title="Open ViralSpy Studio Dashboard">Studio ↗</button>
           <!-- Gear — shown only in Instagram mode (body.sf-gear-on). Keeps its
                footprint while the Settings view is open (fades out in place) so
                the Free/Pro tag stays in the same pixel. -->
@@ -341,6 +342,17 @@
                       <span class="sf-outlier-info-wrap">
                         <span class="sf-outlier-info" tabindex="0" role="img" aria-label="About Outlier score"></span>
                         <span class="sf-outlier-tooltip" role="tooltip">How many times more views a post got than usual. Higher means a bigger breakout.</span>
+                      </span>
+                    </div>
+                  </button>
+
+                  <button id="sortVelocityClick" class="SortButtonMain sf-outlier-btn">
+                    <div style="display: flex; width: 100%; align-items: center;">
+                      <span class="sf-velocity-icon" aria-hidden="true">⚡</span>
+                      <span>Velocity</span>
+                      <span class="sf-outlier-info-wrap">
+                        <span class="sf-outlier-info" tabindex="0" role="img" aria-label="About Velocity"></span>
+                        <span class="sf-outlier-tooltip" role="tooltip">Views per hour relative to baseline. Surfaces videos blowing up in the last 24–72h.</span>
                       </span>
                     </div>
                   </button>
@@ -1221,10 +1233,10 @@
           <!-- Account button. Shows the user's first initial when
                sort_feed_user_profile holds their name/email
                (sfRenderAccountAvatar() in popup_subs.js), else the person icon. -->
-          <a id="sfAccountLink" href="https://account.sortfeed.com/" target="_blank" rel="noopener noreferrer" class="footer-icon-link" aria-label="Account">
+          <a id="sfAccountLink" href="http://127.0.0.1:8765/dashboard" target="_blank" rel="noopener noreferrer" class="footer-icon-link" aria-label="ViralSpy Studio">
             <img id="sfAccountIcon" src="Icons/settingsFooterIcon.png" class="footer-icon-one" alt="">
             <span id="sfAccountAvatar" class="sf-avatar" aria-hidden="true" hidden></span>
-            <span class="footer-icon-tooltip" aria-hidden="true"><span id="sfAccountTipTitle">Account</span><span id="sfAccountEmail" class="sf-tip-sub"></span></span>
+            <span class="footer-icon-tooltip" aria-hidden="true"><span id="sfAccountTipTitle">ViralSpy Studio</span><span id="sfAccountEmail" class="sf-tip-sub"></span></span>
           </a>
 
           <!-- Library / Account menu. Only users with a library (sort_feed_library) get it: their avatar click opens
@@ -1236,11 +1248,11 @@
               <span id="sfAccountMenuName" class="sf-account-menu-name"></span>
             </div>
             <div id="sfAccountMenuDivider" class="sf-account-menu-divider"></div>
-            <a href="https://app.sortfeed.com/" class="sf-menu-item" role="menuitem" target="_blank" rel="noopener noreferrer">
-              <span class="sf-menu-ic sf-menu-ic--library" aria-hidden="true"></span><span>Open library</span>
+            <a href="http://127.0.0.1:8765/dashboard#saved" class="sf-menu-item" role="menuitem" target="_blank" rel="noopener noreferrer">
+              <span class="sf-menu-ic sf-menu-ic--library" aria-hidden="true"></span><span>Open Studio Library</span>
             </a>
-            <a href="https://app.sortfeed.com/?account" class="sf-menu-item" role="menuitem" target="_blank" rel="noopener noreferrer">
-              <span class="sf-menu-ic sf-menu-ic--account" aria-hidden="true"></span><span>Manage account</span>
+            <a href="http://127.0.0.1:8765/dashboard" class="sf-menu-item" role="menuitem" target="_blank" rel="noopener noreferrer">
+              <span class="sf-menu-ic sf-menu-ic--account" aria-hidden="true"></span><span>ViralSpy Studio</span>
             </a>
           </div>
         </div>

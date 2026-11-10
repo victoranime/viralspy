@@ -1364,6 +1364,15 @@ function sort_items(data, sortBy) {
     return [...data].sort(
       (a, b) => ((b.outlierScore ?? b[fb]) || 0) - ((a.outlierScore ?? a[fb]) || 0),
     );
+  } else if (sortBy === "velocity") {
+    const fb = sessionStorage.getItem("sortFeedPostsVSReels") === "Posts" ? "likesCount" : "viewCount";
+    const velOf = (item) => {
+      const val = +(item?.[fb] ?? 0);
+      const ms = item?.createDate ? Date.parse(item.createDate) : NaN;
+      const hrs = Number.isFinite(ms) ? Math.max(1, (Date.now() - ms) / 3600000) : 8760;
+      return val / hrs;
+    };
+    return [...data].sort((a, b) => velOf(b) - velOf(a));
   } else if (sortBy === "likes") {
     return [...data].sort((a, b) => b.likesCount - a.likesCount);
   } else if (sortBy === "comments") {
