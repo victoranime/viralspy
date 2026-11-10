@@ -1,0 +1,19 @@
+{
+  "name": "viralspy-mcp-server",
+  "version": "1.0.0",
+  "description": "ViralSpy Local MCP Server + Chrome Extension WebSocket Bridge + Free Local Whisper Transcription",
+  "type": "module",
+  "main": "index.mjs",
+  "bin": {
+    "viralspy-mcp": "./index.mjs"
+  },
+  "scripts": {
+    "start": "node index.mjs",
+    "daemon": "node index.mjs --daemon"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ws": "^8.20.0",
+    "zod": "^3.25.0"
+  }
+}

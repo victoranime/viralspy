@@ -1,0 +1,11 @@
+# Dependencies
+node_modules/
+mcp-server/node_modules/
+
+# Local user caches & exports
+mcp-server/data/
+
+# OS & Archives
+.DS_Store
+*.zip
+*.log
