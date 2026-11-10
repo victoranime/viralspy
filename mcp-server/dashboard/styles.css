@@ -386,9 +386,11 @@ body {
 /* ── Main Workspace ── */
 
 .workspace {
-  padding: 32px 40px 64px;
+  padding: 32px 36px 64px;
   max-width: 1440px;
   width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
   margin: 0 auto;
 }
 
@@ -1582,10 +1584,12 @@ body {
 .toast {
   background: var(--accent-ink);
   color: var(--accent-ink-fg);
-  padding: 10px 16px;
-  border-radius: 999px;
+  padding: 11px 16px;
+  border-radius: 14px;
+  max-width: min(460px, calc(100vw - 44px));
   font-size: 12.5px;
   font-weight: 500;
+  line-height: 1.4;
   box-shadow: var(--shadow-md);
   animation: fadeUp 0.2s ease;
 }

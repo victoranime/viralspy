@@ -1507,9 +1507,12 @@ else if (message.command === "FacebookReelTranscribe") {
           world: "MAIN",
           args: [targetPk, targetUsername],
           func: async (pk, uname) => {
+            const csrf = (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || "";
             const headers = {
               "x-ig-app-id": "936619743392459",
+              "x-asbd-id": "359341",
               "x-requested-with": "XMLHttpRequest",
+              ...(csrf ? { "x-csrftoken": csrf } : {}),
             };
             let resolvedPk = pk;
             if (!resolvedPk && uname) {

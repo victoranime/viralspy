@@ -620,7 +620,24 @@ function initNicheRadar() {
     try {
       const res = await apiPost("/api/similar", { username: seed });
       if (!res?.ok || !Array.isArray(res.accounts)) {
-        toast(res?.error?.message || "Could not discover similar accounts");
+        if (Array.isArray(res?.suggestions) && res.suggestions.length) {
+          const box = document.getElementById("radarDiscoveredBox");
+          const pills = document.getElementById("radarDiscoveredPills");
+          box.querySelector(".control-label").textContent = `@${seed} wasn't found — click a matching Instagram handle to expand its niche:`;
+          pills.innerHTML = res.suggestions
+            .map((a) => `<button type="button" class="creator-chip" data-suggest="${esc(a.username)}">@${esc(a.username)}</button>`)
+            .join("");
+          box.hidden = false;
+          pills.querySelectorAll(".creator-chip").forEach((chip) => {
+            chip.addEventListener("click", () => {
+              document.getElementById("radarSeedInput").value = chip.dataset.suggest;
+              document.getElementById("radarExpandBtn").click();
+            });
+          });
+          toast(`@${seed} not found — showing closest Instagram accounts`);
+          return;
+        }
+        toast(res?.error?.message || res?.message || "Could not discover similar accounts");
         return;
       }
       const list = res.accounts.filter((a) => !a.is_private).slice(0, 18);
@@ -628,6 +645,7 @@ function initNicheRadar() {
       syncRadarTextareaFromSet();
 
       const box = document.getElementById("radarDiscoveredBox");
+      box.querySelector(".control-label").textContent = "Click to toggle discovered competitors:";
       const pills = document.getElementById("radarDiscoveredPills");
       pills.innerHTML = [
         `<button type="button" class="creator-chip is-selected" data-h="${esc(seed)}">@${esc(seed)}</button>`,

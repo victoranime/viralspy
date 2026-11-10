@@ -424,12 +424,15 @@ async function sfAgentRunJob(job) {
           };
           const pk = mediaIdArg || shortcodeToPk(shortcode);
           if (!pk) return { ok: false, error: { code: "BAD_MEDIA", message: "Invalid Instagram shortcode or media ID." } };
+          const csrf = (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || "";
           const res = await fetch(`https://www.instagram.com/api/v1/media/${encodeURIComponent(pk)}/info/`, {
             method: "GET",
             credentials: "include",
             headers: {
               "x-ig-app-id": "936619743392459",
+              "x-asbd-id": "359341",
               "x-requested-with": "XMLHttpRequest",
+              ...(csrf ? { "x-csrftoken": csrf } : {}),
             },
           });
           const json = await res.json().catch(() => null);
@@ -485,9 +488,12 @@ async function sfAgentRunJob(job) {
           };
           const pk = mediaIdArg || shortcodeToPk(shortcode);
           if (!pk) return { ok: false, error: { code: "BAD_MEDIA", message: "Invalid Instagram shortcode or media ID." } };
+          const csrf = (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || "";
           const headers = {
             "x-ig-app-id": "936619743392459",
+            "x-asbd-id": "359341",
             "x-requested-with": "XMLHttpRequest",
+            ...(csrf ? { "x-csrftoken": csrf } : {}),
           };
           const seen = new Map();
           let minId = null;
@@ -822,41 +828,123 @@ async function sfAgentRunJob(job) {
         throw Object.assign(new Error(`"${job.username}" isn't a valid Instagram username.`), { code: "BAD_USERNAME" });
       }
       const t0 = Date.now();
-      const tabId = await sfAgentOpenTabUnless("https://www.instagram.com/");
+      const tabId = await sfAgentOpenTabUnless(`https://www.instagram.com/${username}/`);
       const execRes = await chrome.scripting.executeScript({
         target: { tabId },
         world: "MAIN",
         args: [username, String(job.targetPk || "")],
         func: async (uname, pkArg) => {
+          const csrf = (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || "";
           const headers = {
             "x-ig-app-id": "936619743392459",
+            "x-asbd-id": "359341",
             "x-requested-with": "XMLHttpRequest",
+            ...(csrf ? { "x-csrftoken": csrf } : {}),
           };
-          let resolvedPk = pkArg;
+
+          const findIdOnLoadedPage = (handle) => {
+            const html = document.documentElement?.innerHTML || "";
+            const needle = `"username":"${handle}"`;
+            const counts = new Map();
+            let idx = -1;
+            while ((idx = html.indexOf(needle, idx + 1)) !== -1) {
+              const win = html.slice(Math.max(0, idx - 400), idx + needle.length + 400);
+              for (const m of win.matchAll(/"(?:pk|id|pk_id|profile_id|user_id|target_user_id)":"?(\d{3,20})"?/g)) {
+                counts.set(m[1], (counts.get(m[1]) || 0) + 2);
+              }
+            }
+            for (const re of [/"profilePage_(\d+)"/g, /"profile_id":"(\d+)"/g, /"target_user_id":"(\d+)"/g]) {
+              for (const m of html.matchAll(re)) {
+                counts.set(m[1], (counts.get(m[1]) || 0) + 3);
+              }
+            }
+            const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+            return ranked.length ? ranked[0][0] : "";
+          };
+
+          let resolvedPk = pkArg || findIdOnLoadedPage(uname);
           let profileInfo = null;
+
           if (!resolvedPk) {
-            const profRes = await fetch(
-              `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(uname)}`,
-              { credentials: "include", headers }
-            );
-            if (!profRes.ok) {
-              return { ok: false, error: { code: "NOT_FOUND", message: `Could not fetch profile info for @${uname} (HTTP ${profRes.status}).` } };
+            try {
+              const profRes = await fetch(
+                `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(uname)}`,
+                { credentials: "include", headers }
+              );
+              if (profRes.ok) {
+                const profJson = await profRes.json().catch(() => null);
+                const u = profJson?.data?.user;
+                if (u) {
+                  resolvedPk = String(u.id || u.pk || "");
+                  profileInfo = {
+                    username: u.username || uname,
+                    full_name: u.full_name || "",
+                    followers: u.edge_followed_by?.count ?? null,
+                    following: u.edge_follow?.count ?? null,
+                    biography: u.biography || "",
+                    is_verified: !!u.is_verified,
+                  };
+                }
+              }
+            } catch (_) {}
+          }
+
+          // Fallback 2: Instagram topsearch (resolves exact handle OR returns closest real handles if misspelled)
+          let searchSuggestions = [];
+          if (!resolvedPk) {
+            for (const q of [uname, uname.replace(/[._]+/g, " ").trim()]) {
+              if (!q) continue;
+              try {
+                const sRes = await fetch(
+                  `https://www.instagram.com/api/v1/web/search/topsearch/?context=blended&query=${encodeURIComponent(q)}&include_reel=false`,
+                  { credentials: "include", headers }
+                );
+                if (sRes.ok) {
+                  const sJson = await sRes.json().catch(() => null);
+                  const foundUsers = (sJson?.users || [])
+                    .map((entry) => entry?.user || entry)
+                    .filter((u) => u?.username);
+                  const exact = foundUsers.find((u) => String(u.username).toLowerCase() === uname.toLowerCase());
+                  if (exact) {
+                    resolvedPk = String(exact.pk || exact.id || "");
+                    profileInfo = {
+                      username: exact.username,
+                      full_name: exact.full_name || "",
+                      is_verified: !!exact.is_verified,
+                    };
+                    break;
+                  }
+                  for (const u of foundUsers) {
+                    if (!searchSuggestions.some((x) => x.username === u.username)) {
+                      searchSuggestions.push({
+                        pk: String(u.pk || u.id || ""),
+                        username: String(u.username),
+                        full_name: String(u.full_name || ""),
+                        is_verified: !!u.is_verified,
+                        is_private: !!u.is_private,
+                        pic: String(u.profile_pic_url || ""),
+                      });
+                    }
+                  }
+                  if (searchSuggestions.length >= 8) break;
+                }
+              } catch (_) {}
             }
-            const profJson = await profRes.json().catch(() => null);
-            const u = profJson?.data?.user;
-            if (!u) {
-              return { ok: false, error: { code: "NOT_FOUND", message: `@${uname} not found on Instagram.` } };
-            }
-            resolvedPk = String(u.id || u.pk || "");
-            profileInfo = {
-              username: u.username || uname,
-              full_name: u.full_name || "",
-              followers: u.edge_followed_by?.count ?? null,
-              following: u.edge_follow?.count ?? null,
-              biography: u.biography || "",
-              is_verified: !!u.is_verified,
+          }
+
+          if (!resolvedPk) {
+            return {
+              ok: false,
+              suggestions: searchSuggestions.slice(0, 12),
+              error: {
+                code: searchSuggestions.length ? "NOT_FOUND_SUGGESTIONS" : "NOT_FOUND",
+                message: searchSuggestions.length
+                  ? `@${uname} doesn't exist on Instagram — click one of the closest matching accounts below.`
+                  : `@${uname} was not found on Instagram (check spelling or make sure you're signed in to Instagram in Chrome).`,
+              },
             };
           }
+
           const res = await fetch(
             `https://www.instagram.com/api/v1/discover/chaining/?target_id=${encodeURIComponent(resolvedPk)}`,
             { credentials: "include", headers }
