@@ -1,7 +1,7 @@
 {
   "name": "viralspy-mcp-server",
-  "version": "1.0.0",
-  "description": "ViralSpy Local MCP Server + Chrome Extension WebSocket Bridge + Free Local Whisper Transcription",
+  "version": "3.0.0",
+  "description": "ViralSpy Studio Hub v3.0 + Local MCP Server + Parallel Niche Radar + VideoBot Reproduce Packs + Whisper GPU",
   "type": "module",
   "main": "index.mjs",
   "bin": {

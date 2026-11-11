@@ -47,7 +47,28 @@
             <path d="M12 12 18.3 5.7"></path>
           </svg>
           <span>Niche Radar</span>
-          <span class="nav-pill">Multi</span>
+          <span class="nav-pill">Parallel</span>
+        </button>
+
+        <button class="nav-item" data-view="videodb" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="2.5" y="4" width="19" height="16" rx="2.5"></rect>
+            <path d="M2.5 9h19"></path>
+            <path d="m8 4-2 5M14 4l-2 5M20 4l-2 5"></path>
+            <polygon points="10,12 10,17 15,14.5" fill="currentColor" stroke="none"></polygon>
+          </svg>
+          <span>Video Database</span>
+          <span id="videoDbCountBadge" class="nav-count">0</span>
+        </button>
+
+        <button class="nav-item" data-view="database" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <ellipse cx="12" cy="5" rx="8.5" ry="3"></ellipse>
+            <path d="M3.5 5v7c0 1.66 3.8 3 8.5 3s8.5-1.34 8.5-3V5"></path>
+            <path d="M3.5 12v7c0 1.66 3.8 3 8.5 3s8.5-1.34 8.5-3v-7"></path>
+          </svg>
+          <span>Master Database</span>
+          <span id="masterDbCountBadge" class="nav-count">0</span>
         </button>
 
         <button class="nav-item" data-view="comments" type="button">
@@ -107,7 +128,7 @@
         <header class="view-header">
           <div>
             <h1 class="view-title">Creator Spy</h1>
-            <p class="view-subtitle">Rank any creator's feed by Outlier breakout, 24h Velocity, or raw engagement.</p>
+            <p class="view-subtitle">Rank any creator's feed by Outlier breakout, 24h Velocity, or raw engagement. Every post is saved permanently.</p>
           </div>
           <div class="header-actions" id="spyExportActions" hidden>
             <button id="discoverSimilarBtn" class="btn-secondary" type="button">Similar Creators</button>
@@ -116,7 +137,6 @@
           </div>
         </header>
 
-        <!-- Control Bar -->
         <form id="spyForm" class="control-card">
           <div class="control-top-row">
             <div class="seg-group" id="platformSeg" role="radiogroup" aria-label="Platform">
@@ -127,7 +147,7 @@
 
             <div class="input-handle-wrap">
               <span class="input-prefix">@</span>
-              <input id="spyUsernameInput" type="text" placeholder="andre_gizmo" autocomplete="off" required />
+              <input id="spyUsernameInput" type="text" placeholder="furever_healthy or paste profile URL" autocomplete="off" required />
             </div>
 
             <select id="spySurfaceSelect" class="apple-select" aria-label="Surface">
@@ -165,7 +185,6 @@
           </div>
         </form>
 
-        <!-- Similar Accounts Strip (collapsible) -->
         <div id="similarStrip" class="similar-strip" hidden>
           <div class="similar-strip-head">
             <span id="similarStripTitle">Similar creators</span>
@@ -177,7 +196,6 @@
           <div id="similarChipsRow" class="similar-chips-row"></div>
         </div>
 
-        <!-- KPI Summary Strip -->
         <div id="spyKpiGrid" class="kpi-grid" hidden>
           <div class="kpi-card">
             <span class="kpi-label">Creator</span>
@@ -201,7 +219,6 @@
           </div>
         </div>
 
-        <!-- Results Grid -->
         <div id="spyEmptyState" class="empty-stage">
           <div class="empty-stage-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -212,8 +229,9 @@
             </svg>
           </div>
           <h2>Ready to inspect any creator</h2>
-          <p>Enter an Instagram, TikTok, or YouTube handle above to rank their highest-performing outliers, extract 3-frame visual hooks with OCR, and transcribe scripts locally.</p>
+          <p>Enter an Instagram, TikTok, or YouTube handle or profile URL above. Every scraped post is saved permanently to your Master Database.</p>
           <div class="sample-chips">
+            <button type="button" class="sample-chip" data-sample="furever_healthy">@furever_healthy</button>
             <button type="button" class="sample-chip" data-sample="andre_gizmo">@andre_gizmo</button>
           </div>
         </div>
@@ -221,30 +239,30 @@
         <div id="spyMediaGrid" class="media-grid"></div>
       </section>
 
-      <!-- VIEW 2: NICHE RADAR -->
+      <!-- VIEW 2: NICHE RADAR (PARALLEL MULTI-URL SCRAPER) -->
       <section id="view-radar" class="view-panel">
         <header class="view-header">
           <div>
             <h1 class="view-title">Niche Radar</h1>
-            <p class="view-subtitle">Scan multiple competitors together to surface what is breaking out across your entire market this week.</p>
+            <p class="view-subtitle">Paste multiple account links or @handles to scrape them simultaneously in parallel and permanently save every post.</p>
           </div>
         </header>
 
         <div class="control-card">
           <div class="radar-seed-row">
             <div class="radar-seed-left">
-              <span class="control-label">Auto-expand from 1 seed creator</span>
+              <span class="control-label">Optional: auto-expand from 1 seed profile URL or handle</span>
               <div class="seed-inline">
                 <div class="input-handle-wrap compact">
                   <span class="input-prefix">@</span>
-                  <input id="radarSeedInput" type="text" placeholder="andre_gizmo" autocomplete="off" />
+                  <input id="radarSeedInput" type="text" placeholder="furever_healthy or https://www.instagram.com/..." autocomplete="off" />
                 </div>
                 <button id="radarExpandBtn" type="button" class="btn-secondary">Discover Competitors</button>
               </div>
             </div>
 
             <div class="radar-window-right">
-              <span class="control-label">Time window</span>
+              <span class="control-label">Leaderboard window</span>
               <div class="seg-group seg-group-compact" id="radarWindowSeg">
                 <button type="button" class="seg-btn" data-days="7">7 Days</button>
                 <button type="button" class="seg-btn" data-days="14">14 Days</button>
@@ -260,8 +278,8 @@
           </div>
 
           <div class="radar-Editor-row">
-            <label for="radarAccountsTextarea" class="control-label">Competitor handles to scan (comma or space separated, up to 15)</label>
-            <textarea id="radarAccountsTextarea" rows="2" class="apple-textarea" placeholder="andre_gizmo, creator_two, creator_three"></textarea>
+            <label for="radarAccountsTextarea" class="control-label">Paste multiple profile URLs or @handles (one per line, space, or comma separated — scrapes in parallel &amp; archives all posts)</label>
+            <textarea id="radarAccountsTextarea" rows="3" class="apple-textarea" placeholder="https://www.instagram.com/furever_healthy/&#10;https://www.instagram.com/andre_gizmo/reels/&#10;https://www.tiktok.com/@creator"></textarea>
           </div>
 
           <div class="control-bottom-row">
@@ -276,20 +294,117 @@
 
             <div class="radar-launch-wrap">
               <select id="radarDepthSelect" class="apple-select">
-                <option value="24">24 Reels / account</option>
-                <option value="36" selected>36 Reels / account</option>
-                <option value="60">60 Reels / account</option>
+                <option value="24">24 posts / account</option>
+                <option value="36" selected>36 posts / account</option>
+                <option value="60">60 posts / account</option>
+                <option value="100">100 posts / account</option>
               </select>
-              <button id="runRadarBtn" type="button" class="btn-primary">Run Niche Radar</button>
+              <button id="runRadarBtn" type="button" class="btn-primary">Scrape All in Parallel</button>
             </div>
           </div>
         </div>
 
+        <div id="radarLiveAccountsBar" class="radar-account-pills" hidden></div>
         <div id="radarSummaryBar" class="radar-account-pills" hidden></div>
         <div id="radarMediaGrid" class="media-grid"></div>
       </section>
 
-      <!-- VIEW 3: COMMENT GOLDMINE -->
+      <!-- VIEW 3: VIDEO DATABASE (REPRODUCE PACKS — VIDEOBOT REPLACEMENT) -->
+      <section id="view-videodb" class="view-panel">
+        <header class="view-header">
+          <div>
+            <h1 class="view-title">Video Database</h1>
+            <p class="view-subtitle">One-shot VideoBot engine: shot-cut frames (`scene_01.jpg…`), word-aligned `scenes.txt`, Whisper `transcript.txt`, `storyboard.jpg`, `.zip`, and 1-click Skill Remake.</p>
+          </div>
+        </header>
+
+        <form id="reproduceForm" class="control-card">
+          <div class="control-top-row">
+            <input id="reproduceUrlInput" type="text" class="apple-input-wide" placeholder="Paste any Instagram Reel or TikTok Video link (e.g. https://www.instagram.com/reel/DbhFF5aui3u/)" required />
+            <button id="reproduceSubmitBtn" type="submit" class="btn-primary">
+              <span>One-Shot Reproduce (.zip)</span>
+            </button>
+          </div>
+        </form>
+
+        <div id="videoDbEmptyState" class="empty-stage">
+          <div class="empty-stage-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="2.5" y="4" width="19" height="16" rx="2.5"></rect>
+              <path d="M2.5 9h19"></path>
+              <polygon points="10,12 10,17 15,14.5" fill="currentColor" stroke="none"></polygon>
+            </svg>
+          </div>
+          <h2>No Reproduce Packs yet</h2>
+          <p>Paste a Reel link above, click <strong>Reproduce</strong> on any card in Studio, or click the clapperboard icon right above Save directly on Instagram &amp; TikTok.</p>
+        </div>
+
+        <div id="videoDbList" class="reproduce-packs-stack"></div>
+      </section>
+
+      <!-- VIEW 4: PERMANENT MASTER DATABASE (ALL SCRAPED POSTS) -->
+      <section id="view-database" class="view-panel">
+        <header class="view-header">
+          <div>
+            <h1 class="view-title">Master Database</h1>
+            <p class="view-subtitle">Every post ever scraped across Creator Spy, Niche Radar, and Chrome sorts — permanently saved on disk so you never lose data.</p>
+          </div>
+          <div class="header-actions">
+            <button id="dbExportCsvBtn" type="button" class="btn-secondary">Export Filtered CSV</button>
+            <button id="dbExportJsonBtn" type="button" class="btn-secondary">Export Filtered JSON</button>
+          </div>
+        </header>
+
+        <div class="control-card">
+          <div class="control-top-row">
+            <input id="dbSearchInput" type="search" class="apple-input-wide" placeholder="Search captions, Whisper transcripts, @handles, or shortcodes…" />
+            <select id="dbCreatorSelect" class="apple-select">
+              <option value="">All Creators</option>
+            </select>
+            <select id="dbPlatformSelect" class="apple-select">
+              <option value="all">All Platforms</option>
+              <option value="instagram">Instagram</option>
+              <option value="tiktok">TikTok</option>
+              <option value="youtube">YouTube</option>
+            </select>
+            <select id="dbMinOutlierSelect" class="apple-select">
+              <option value="0">Any Outlier</option>
+              <option value="2">2.0x+ Outliers</option>
+              <option value="5">5.0x+ Breakouts</option>
+              <option value="10">10.0x+ Mega Hits</option>
+            </select>
+          </div>
+
+          <div class="control-bottom-row">
+            <div class="sort-pills-wrap">
+              <span class="control-label">Sort by</span>
+              <div class="seg-group seg-group-compact" id="dbSortSeg">
+                <button type="button" class="seg-btn is-active" data-sort="outlier">Outlier Score</button>
+                <button type="button" class="seg-btn" data-sort="velocity">Velocity ⚡</button>
+                <button type="button" class="seg-btn" data-sort="views">Views</button>
+                <button type="button" class="seg-btn" data-sort="likes">Likes</button>
+                <button type="button" class="seg-btn" data-sort="recent">Recently Scraped</button>
+              </div>
+            </div>
+
+            <div class="db-filter-toggles">
+              <label class="apple-check-pill">
+                <input id="dbSavedOnlyCheck" type="checkbox" />
+                <span>★ Saved Only</span>
+              </label>
+              <label class="apple-check-pill">
+                <input id="dbReproducedOnlyCheck" type="checkbox" />
+                <span>Pack Ready Only</span>
+              </label>
+              <span id="dbResultCounter" class="control-label">0 posts</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="dbMediaGrid" class="media-grid"></div>
+      </section>
+
+      <!-- VIEW 5: COMMENT GOLDMINE -->
       <section id="view-comments" class="view-panel">
         <header class="view-header">
           <div>
@@ -322,7 +437,7 @@
 
           <div class="comments-col">
             <div class="comments-col-head">
-              <h3>Requests & Buying Signals</h3>
+              <h3>Requests &amp; Buying Signals</h3>
               <span id="requestsCountBadge" class="pill-count">0</span>
             </div>
             <p class="comments-col-desc">Links, tutorials, recipes, products, and part-2 requests.</p>
@@ -340,12 +455,12 @@
         </div>
       </section>
 
-      <!-- VIEW 4: SWIPE VAULT -->
+      <!-- VIEW 6: SWIPE VAULT -->
       <section id="view-vault" class="view-panel">
         <header class="view-header">
           <div>
             <h1 class="view-title">Swipe Vault</h1>
-            <p class="view-subtitle">Your saved outlier posts, local Whisper transcripts, and extracted 3-frame visual hooks.</p>
+            <p class="view-subtitle">Two-way synced with your Chrome Save button on Instagram &amp; TikTok, plus cached Whisper scripts and 3-frame Visual Hooks.</p>
           </div>
           <div class="seg-group seg-group-compact" id="vaultTabSeg">
             <button type="button" class="seg-btn is-active" data-vault="saved">Saved Posts</button>
@@ -370,14 +485,14 @@
         <div id="drawerBadges" class="drawer-badges"></div>
       </div>
       <div class="drawer-header-actions">
+        <button id="drawerReproduceBtn" type="button" class="btn-primary btn-sm">Reproduce .zip ✦</button>
         <a id="drawerExternalLink" href="#" target="_blank" rel="noopener noreferrer" class="btn-secondary btn-sm">Open Post ↗</a>
-        <a id="drawerDownloadMp4Btn" href="#" class="btn-primary btn-sm" hidden>Download MP4 ↓</a>
+        <a id="drawerDownloadMp4Btn" href="#" class="btn-secondary btn-sm" hidden>MP4 ↓</a>
         <button id="closeDrawerBtn" type="button" class="icon-btn" aria-label="Close inspector">✕</button>
       </div>
     </div>
 
     <div class="drawer-body">
-      <!-- Video Preview & Metrics -->
       <div class="drawer-media-row">
         <div class="drawer-video-frame" id="drawerVideoWrap"></div>
         <div class="drawer-stats-panel">
@@ -406,11 +521,26 @@
         </div>
       </div>
 
+      <!-- Reproduce Pack Preview inside Drawer -->
+      <div id="drawerPackCard" class="inspector-card is-highlight-pack" hidden>
+        <div class="inspector-card-head">
+          <div>
+            <h3>VideoBot Reproduce Pack Ready</h3>
+            <p id="drawerPackSub">Shot-cut frames + scenes.txt + storyboard.jpg</p>
+          </div>
+          <div class="pacing-pills">
+            <a id="drawerPackZipLink" href="#" class="btn-secondary btn-sm">Download .zip ↓</a>
+            <button id="drawerCopySkillBtn" type="button" class="btn-primary btn-sm">Copy Skill Prompt ✦</button>
+          </div>
+        </div>
+        <div id="drawerPackScenes" class="drawer-pack-scenes"></div>
+      </div>
+
       <!-- 1. Visual Hook (0s · 1.5s · 3s + Apple Vision OCR) -->
       <div class="inspector-card">
         <div class="inspector-card-head">
           <div>
-            <h3>Visual Hook & On-Screen OCR</h3>
+            <h3>Visual Hook &amp; On-Screen OCR</h3>
             <p>First 3 seconds (`0.0s`, `1.5s`, `3.0s`) via local FFmpeg + Apple Vision</p>
           </div>
           <button id="extractHookBtn" type="button" class="btn-primary btn-sm">Extract 3 Frames + OCR</button>
@@ -431,7 +561,7 @@
       <div class="inspector-card">
         <div class="inspector-card-head">
           <div>
-            <h3>Spoken Hook & Full Script</h3>
+            <h3>Spoken Hook &amp; Full Script</h3>
             <p>100% free local Whisper.cpp transcription on Apple Metal GPU</p>
           </div>
           <button id="transcribeReelBtn" type="button" class="btn-primary btn-sm">Transcribe Audio</button>
@@ -460,7 +590,7 @@
       <div class="inspector-card">
         <div class="inspector-card-head">
           <div>
-            <h3>Audience Questions & Comments</h3>
+            <h3>Audience Questions &amp; Comments</h3>
             <p>Top-liked comments and unanswered questions under this post</p>
           </div>
           <button id="drawerMineCommentsBtn" type="button" class="btn-secondary btn-sm">Mine Comments</button>

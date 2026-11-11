@@ -1,0 +1,210 @@
+/* ============================================================================
+   ViralSpy — One-Shot Reproduce Button (right above Save) + Floating Pack Toast
+   Matches .sf-save-btn geometry 1:1 (19x19 white square, 3px radius, left tip)
+   ============================================================================ */
+
+.vs-reproduce-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.9;
+  transition: opacity 180ms ease, transform 160ms ease;
+  pointer-events: auto;
+  outline: none;
+  user-select: none;
+}
+
+.vs-reproduce-btn.vs-reproduce-sp {
+  opacity: 0.8;
+}
+
+.vs-reproduce-btn:hover,
+.vs-reproduce-btn.is-loading,
+.vs-reproduce-btn.is-done {
+  opacity: 1 !important;
+}
+
+.vs-reproduce-square {
+  position: relative;
+  box-sizing: border-box;
+  width: 19px;
+  height: 19px;
+  border-radius: 3px;
+  background: #ffffff;
+  color: #111113;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.vs-reproduce-btn:hover .vs-reproduce-square {
+  background: #111113;
+  color: #ffffff;
+}
+
+.vs-reproduce-btn.is-loading .vs-reproduce-square {
+  background: #111113;
+  color: #ffffff;
+}
+
+.vs-reproduce-btn.is-done .vs-reproduce-square {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.vs-reproduce-glyph {
+  width: 11.5px;
+  height: 11.5px;
+  display: block;
+  flex-shrink: 0;
+}
+
+.vs-reproduce-spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.6px solid rgba(255, 255, 255, 0.28);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: vsSpin 0.65s linear infinite;
+}
+
+@keyframes vsSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.vs-reproduce-tip {
+  position: absolute;
+  top: 50%;
+  left: -6px;
+  transform: translate(-100%, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #000000;
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 400;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 99999;
+  transition: opacity 120ms ease;
+}
+
+.vs-reproduce-btn:hover .vs-reproduce-tip {
+  opacity: 1;
+}
+
+.vs-reproduce-pill-tag {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #fde082;
+  background: rgba(253, 224, 130, 0.16);
+  border-radius: 3px;
+  padding: 2px 4px;
+}
+
+/* TikTok sorted tile wrapper visibility on card hover */
+[data-sf-sorted-item="true"]:hover .vs-tk-sorted-reproduce-wrap {
+  opacity: 1 !important;
+}
+
+/* Floating Bottom Toast for One-Shot Reproduce Pack */
+.vs-pack-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 2147483646;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(17, 17, 20, 0.94);
+  backdrop-filter: saturate(180%) blur(18px);
+  -webkit-backdrop-filter: saturate(180%) blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.42);
+  color: #f5f5f7;
+  padding: 9px 13px;
+  border-radius: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font-size: 12.5px;
+  line-height: 1.3;
+  max-width: min(92vw, 620px);
+}
+
+.vs-pack-toast-spinner {
+  width: 13px;
+  height: 13px;
+  border: 1.8px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: vsSpin 0.65s linear infinite;
+}
+
+.vs-pack-toast-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex-shrink: 0;
+}
+
+.vs-pack-toast-dot.is-error {
+  background: #ef4444;
+}
+
+.vs-pack-toast-text {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vs-pack-toast-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+}
+
+.vs-pack-toast-btn {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 140ms ease;
+}
+
+.vs-pack-toast-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.vs-pack-toast-btn.is-accent {
+  background: #f5f5f7;
+  color: #111113;
+  border-color: transparent;
+}
+
+.vs-pack-toast-btn.is-accent:hover {
+  background: #ffffff;
+}

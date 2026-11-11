@@ -2,15 +2,21 @@ const state = {
   platform: "instagram",
   spySort: "outlier",
   spyFilter: "",
-  currentScan: null, // { platform, username, surface, outlierBaseline, posts: [] }
+  currentScan: null,
   similarAccounts: [],
   radarDays: 30,
   radarSort: "outlier",
   radarRun: null,
   radarSelectedHandles: new Set(),
+  dbSort: "outlier",
+  dbPosts: [],
+  dbCreators: [],
+  expandedPacks: new Set(),
   vaultTab: "saved",
   library: {
     savedPosts: [],
+    reproducePacks: [],
+    postsDbCount: 0,
     transcripts: {},
     visualHooks: {},
     comments: {},
@@ -76,13 +82,13 @@ function esc(str) {
     .replace(/"/g, "&quot;");
 }
 
-function toast(msg) {
+function toast(msg, durationMs = 3400) {
   const wrap = document.getElementById("toastContainer");
   const el = document.createElement("div");
   el.className = "toast";
   el.textContent = msg;
   wrap.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
+  setTimeout(() => el.remove(), durationMs);
 }
 
 function setBanner(visible, text = "") {
@@ -90,6 +96,16 @@ function setBanner(visible, text = "") {
   const label = document.getElementById("globalJobText");
   banner.hidden = !visible;
   if (text) label.textContent = text;
+}
+
+function triggerBrowserDownload(url, filename) {
+  const a = document.createElement("a");
+  a.href = url;
+  if (filename) a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 1200);
 }
 
 async function apiPost(path, payload) {
@@ -121,18 +137,58 @@ function switchView(viewName) {
     panel.classList.toggle("is-active", panel.id === `view-${viewName}`);
   });
   if (viewName === "vault") renderVault();
+  if (viewName === "videodb") renderVideoDb();
+  if (viewName === "database") refreshMasterDatabase();
+}
+
+function syncViewFromHash() {
+  const h = (window.location.hash || "").replace(/^#/, "").toLowerCase();
+  if (h === "saved" || h === "vault") switchView("vault");
+  else if (h === "videodb" || h === "reproduce") switchView("videodb");
+  else if (h === "database" || h === "db") switchView("database");
+  else if (h === "radar") switchView("radar");
+  else if (h === "comments") switchView("comments");
 }
 
 function initNavigation() {
   document.querySelectorAll(".nav-item").forEach((btn) => {
-    btn.addEventListener("click", () => switchView(btn.dataset.view));
+    btn.addEventListener("click", () => {
+      const v = btn.dataset.view;
+      history.replaceState(null, "", `#${v}`);
+      switchView(v);
+    });
   });
-  if (window.location.hash === "#saved" || window.location.hash === "#vault") {
-    switchView("vault");
-  }
+  window.addEventListener("hashchange", syncViewFromHash);
+  syncViewFromHash();
 }
 
-// ── Live Status & Workspace Library ─────────────────────────────────────────
+// ── Live Status, Two-Way Sync & Workspace Library ───────────────────────────
+
+function renderLiveRadarAccounts(accountsObj) {
+  const bar = document.getElementById("radarLiveAccountsBar");
+  const entries = Object.entries(accountsObj || {});
+  if (!entries.length) {
+    bar.hidden = true;
+    bar.innerHTML = "";
+    return;
+  }
+  bar.hidden = false;
+  bar.innerHTML = entries
+    .map(([handle, info]) => {
+      const st = info?.status || "queued";
+      const cls = st === "scanning" ? "is-scanning" : st === "done" ? "is-done" : "";
+      const tag =
+        st === "scanning"
+          ? "scraping ⚡"
+          : st === "done"
+          ? `saved ✓ (${info.scannedCount || 0})`
+          : st === "error"
+          ? "failed"
+          : "queued";
+      return `<div class="radar-stat-pill ${cls}"><strong>@${esc(handle)}</strong><code>${esc(tag)}</code></div>`;
+    })
+    .join("");
+}
 
 async function refreshStatus() {
   try {
@@ -145,7 +201,7 @@ async function refreshStatus() {
     dot.className = `status-dot ${online ? "is-online" : "is-offline"}`;
     title.textContent = online ? "Chrome · Connected" : "Waiting for Chrome…";
     sub.textContent = online
-      ? `${st.extension.browser || "Chrome"} · v${st.extension.version || "20.0"}`
+      ? `${st.extension.browser || "Chrome"} · v${st.extension.version || "21.0"}`
       : "Open Chrome with ViralSpy enabled";
 
     const whisperChip = document.getElementById("whisperChip");
@@ -156,8 +212,26 @@ async function refreshStatus() {
     visionChip.classList.toggle("is-ready", !!st?.visionOcrAvailable);
     visionChip.textContent = st?.visionOcrAvailable ? "Vision OCR · Ready" : "Vision OCR";
 
+    if (typeof st?.postsDbCount === "number") {
+      document.getElementById("masterDbCountBadge").textContent = String(st.postsDbCount);
+    }
+    if (typeof st?.reproducePacksCount === "number") {
+      document.getElementById("videoDbCountBadge").textContent = String(st.reproducePacksCount);
+    }
+
     if (st?.liveRadar?.running) {
-      setBanner(true, `${st.liveRadar.step || "Running Niche Radar…"}`);
+      setBanner(true, st.liveRadar.step || "Scraping accounts in parallel…");
+      renderLiveRadarAccounts(st.liveRadar.accounts);
+    } else {
+      document.getElementById("radarLiveAccountsBar").hidden = true;
+    }
+
+    // Two-way sync check: if Chrome extension saved/unsaved or created a pack, refresh library automatically
+    if (
+      (typeof st?.savedLibraryCount === "number" && st.savedLibraryCount !== state.library.savedPosts.length) ||
+      (typeof st?.reproducePacksCount === "number" && st.reproducePacksCount !== state.library.reproducePacks.length)
+    ) {
+      await loadLibrary();
     }
   } catch (_) {}
 }
@@ -167,31 +241,51 @@ async function loadLibrary() {
     const data = await fetch("/api/library").then((r) => r.json());
     if (!data?.ok) return;
     state.library.savedPosts = data.savedPosts || [];
+    state.library.reproducePacks = data.reproducePacks || [];
+    state.library.postsDbCount = data.postsDbCount || 0;
     state.library.transcripts = data.transcripts || {};
     state.library.visualHooks = data.visualHooks || {};
     state.library.comments = data.comments || {};
     state.library.recentScans = data.recentScans || [];
     state.library.radarRuns = data.radarRuns || [];
 
-    const totalVault =
-      state.library.savedPosts.length +
-      Object.keys(state.library.transcripts).length +
-      Object.keys(state.library.visualHooks).length;
-    document.getElementById("vaultCountBadge").textContent = String(totalVault);
-
+    updateSidebarCounts();
     renderRecentScans();
 
-    // Auto-hydrate latest scan & latest radar if none loaded yet
     if (!state.currentScan && state.library.recentScans.length > 0) {
       state.currentScan = state.library.recentScans[0];
       renderSpyResults();
+    } else if (state.currentScan) {
+      renderSpyResults();
     }
+
     if (!state.radarRun && state.library.radarRuns.length > 0) {
       state.radarRun = state.library.radarRuns[0];
       renderRadarResults();
+    } else if (state.radarRun) {
+      renderRadarResults();
+    }
+
+    if (document.getElementById("view-vault").classList.contains("is-active")) {
+      renderVault();
+    }
+    if (document.getElementById("view-videodb").classList.contains("is-active")) {
+      renderVideoDb();
     }
   } catch (_) {}
 }
+
+function updateSidebarCounts() {
+  const totalVault = state.library.savedPosts.length;
+  document.getElementById("vaultCountBadge").textContent = String(totalVault);
+  document.getElementById("videoDbCountBadge").textContent = String(state.library.reproducePacks.length);
+  document.getElementById("masterDbCountBadge").textContent = String(state.library.postsDbCount || 0);
+}
+
+// Re-sync immediately when switching back from Chrome tab to Studio tab
+window.addEventListener("focus", () => {
+  loadLibrary();
+});
 
 function renderRecentScans() {
   const wrap = document.getElementById("recentScansList");
@@ -224,6 +318,67 @@ function renderRecentScans() {
   });
 }
 
+// ── Shared Reproduce Helper (1-Shot VideoBot Pack + .zip + Skill Prompt) ───
+
+function getPackForCode(code) {
+  if (!code) return null;
+  return state.library.reproducePacks.find((p) => p.shortcode === code) || null;
+}
+
+async function runOneShotReproduce(postOrParams, triggerBtn = null) {
+  const origLabel = triggerBtn ? triggerBtn.textContent : "";
+  if (triggerBtn) {
+    triggerBtn.disabled = true;
+    triggerBtn.textContent = "Packing…";
+  }
+  const codeLabel = postOrParams.shortcode || postOrParams.code || postOrParams.url || "video";
+  setBanner(true, `Building Reproduce Pack (${codeLabel}): FFmpeg scene cuts + Whisper word alignment + .zip…`);
+
+  try {
+    const res = await apiPost("/api/reproduce", postOrParams);
+    if (!res?.ok) {
+      toast(res?.message || "Reproduce Pack failed — verify Chrome is open");
+      return null;
+    }
+    const pack = res.pack || res;
+    const existingIdx = state.library.reproducePacks.findIndex((p) => p.packId === pack.packId);
+    if (existingIdx >= 0) state.library.reproducePacks.splice(existingIdx, 1);
+    state.library.reproducePacks.unshift(pack);
+    updateSidebarCounts();
+
+    // Auto-download the .zip immediately (exact VideoBot workflow)
+    triggerBrowserDownload(pack.zipUrl, `${pack.packId}.zip`);
+
+    // Also copy the ready-to-run video-storyboard Skill prompt to clipboard
+    if (pack.skillPrompt) {
+      try {
+        await navigator.clipboard.writeText(pack.skillPrompt);
+        toast(`${pack.packId}.zip downloaded (${pack.sceneCount} scenes) + Remake Skill prompt copied!`, 4800);
+      } catch (_) {
+        toast(`${pack.packId}.zip downloaded (${pack.sceneCount} scenes)!`, 4200);
+      }
+    }
+
+    if (triggerBtn) {
+      triggerBtn.classList.add("is-pack-ready");
+      triggerBtn.textContent = "Pack ✓";
+    }
+    renderVideoDb();
+    return pack;
+  } catch (err) {
+    toast("Error communicating with local Reproduce Engine");
+    return null;
+  } finally {
+    if (triggerBtn) {
+      triggerBtn.disabled = false;
+      if (!triggerBtn.classList.contains("is-pack-ready")) {
+        triggerBtn.textContent = origLabel || "Reproduce";
+      }
+    }
+    setBanner(false);
+  }
+}
+
 // ── Shared 9:16 Media Card Renderer ─────────────────────────────────────────
 
 function sortPostsClient(posts, sortBy) {
@@ -235,6 +390,7 @@ function sortPostsClient(posts, sortBy) {
     if (sortBy === "views") return (b.views || 0) - (a.views || 0);
     if (sortBy === "likes") return (b.likes || 0) - (a.likes || 0);
     if (sortBy === "comments") return (b.comments || 0) - (a.comments || 0);
+    if (sortBy === "recent") return String(b.lastScrapedAt || "").localeCompare(String(a.lastScrapedAt || ""));
     return ((b.outlierScore ?? b.views) || 0) - ((a.outlierScore ?? a.views) || 0);
   });
   return arr;
@@ -254,13 +410,13 @@ function buildMediaGridHtml(posts) {
       const outText = outVal != null ? `${outVal.toFixed(1)}x` : `#${idx + 1}`;
       const velText =
         p.velocityScore != null
-          ? `⚡ ${p.velocityScore.toFixed(1)}x/d`
+          ? `⚡ ${Number(p.velocityScore).toFixed(1)}x/d`
           : p.viewsPerHour != null
           ? `⚡ ${fmtCompact(p.viewsPerHour)}/h`
           : "";
       const coverSrc = p.thumbnailUrl ? proxyMedia(p.thumbnailUrl) : "";
       const saved = isPostSaved(code);
-      const mp4Href = p.videoUrl ? proxyMedia(p.videoUrl, true, `${p.username || "reel"}_${code}.mp4`) : "";
+      const pack = getPackForCode(code);
       const age = fmtRelativeAge(p.createDate, p.ageHours);
 
       return `
@@ -291,13 +447,11 @@ function buildMediaGridHtml(posts) {
           <p class="reel-caption">${esc(p.caption || "No caption")}</p>
           <div class="reel-actions">
             <button type="button" class="card-btn is-primary" data-action="inspect">Inspect</button>
+            <button type="button" class="card-btn ${pack ? "is-pack-ready" : "is-reproduce"}" data-action="reproduce" title="One-Shot Reproduce Pack (.zip + scenes + script + Skill prompt)">${
+              pack ? "Pack ✓" : "Reproduce"
+            }</button>
             <button type="button" class="card-btn" data-action="hook" title="Extract 3-frame Visual Hook + OCR">OCR</button>
-            ${
-              mp4Href
-                ? `<a href="${esc(mp4Href)}" class="card-btn" title="Download clean MP4">MP4 ↓</a>`
-                : ""
-            }
-            <button type="button" class="card-btn ${saved ? "is-saved" : ""}" data-action="save" title="Save to Swipe Vault">${
+            <button type="button" class="card-btn ${saved ? "is-saved" : ""}" data-action="save" title="Save (two-way synced with Chrome)">${
               saved ? "★" : "☆"
             }</button>
           </div>
@@ -317,6 +471,11 @@ function wireGridEvents(container, postsList) {
       el.addEventListener("click", () => openInspector(post));
     });
 
+    card.querySelector('[data-action="reproduce"]')?.addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
+      await runOneShotReproduce(post, btn);
+    });
+
     card.querySelector('[data-action="hook"]')?.addEventListener("click", async () => {
       await openInspector(post);
       triggerVisualHookExtraction();
@@ -327,23 +486,21 @@ function wireGridEvents(container, postsList) {
       const code = post.shortcode || post.code;
       const currentlySaved = isPostSaved(code);
       if (currentlySaved) {
-        await apiPost("/save/unsave", { code });
+        await apiPost("/save/v2/posts/unsave", { code, platform: post.platform || "instagram" });
         state.library.savedPosts = state.library.savedPosts.filter((p) => p.code !== code && p.shortcode !== code);
         btn.classList.remove("is-saved");
         btn.textContent = "☆";
-        toast("Removed from Swipe Vault");
+        toast("Removed from Swipe Vault (synced with Chrome)");
       } else {
-        await apiPost("/save", post);
-        state.library.savedPosts.unshift({ ...post, code, shortcode: code });
+        const res = await apiPost("/save/v2/posts", post);
+        const savedObj = res?.post || { ...post, code, shortcode: code };
+        state.library.savedPosts = state.library.savedPosts.filter((p) => p.code !== code && p.shortcode !== code);
+        state.library.savedPosts.unshift(savedObj);
         btn.classList.add("is-saved");
         btn.textContent = "★";
-        toast("Saved to Swipe Vault");
+        toast("Saved to Swipe Vault (synced with Chrome)");
       }
-      document.getElementById("vaultCountBadge").textContent = String(
-        state.library.savedPosts.length +
-          Object.keys(state.library.transcripts).length +
-          Object.keys(state.library.visualHooks).length
-      );
+      updateSidebarCounts();
     });
   });
 }
@@ -386,13 +543,12 @@ function renderSpyResults() {
     : scan.posts;
   const sorted = sortPostsClient(filtered, state.spySort);
 
-  // KPI values
   const baseline = scan.outlierBaseline?.baseline ?? null;
   const peakOutlier = scan.posts.reduce((mx, p) => Math.max(mx, p.outlierScore || 0), 0);
   const topVel = scan.posts.reduce((mx, p) => Math.max(mx, p.viewsPerHour || 0), 0);
 
   document.getElementById("kpiCreator").textContent = `@${scan.username}`;
-  document.getElementById("kpiScannedSub").textContent = `${scan.posts.length} ${scan.surface || "items"} analyzed (${scan.platform || "instagram"})`;
+  document.getElementById("kpiScannedSub").textContent = `${scan.posts.length} ${scan.surface || "items"} saved to DB`;
   document.getElementById("kpiBaseline").textContent = baseline ? fmtCompact(baseline) : "—";
   document.getElementById("kpiPeakOutlier").textContent = peakOutlier > 0 ? `${peakOutlier.toFixed(1)}x` : "—";
   document.getElementById("kpiTopVelocity").textContent = topVel > 0 ? `${fmtCompact(topVel)} / hr` : "—";
@@ -401,30 +557,27 @@ function renderSpyResults() {
   wireGridEvents(mediaGrid, sorted);
 }
 
-function exportCurrentPosts(format = "csv") {
-  const scan = state.currentScan;
-  if (!scan?.posts?.length) return;
-  const rows = sortPostsClient(scan.posts, state.spySort);
-  const slug = `${scan.username}_${scan.platform || "ig"}_${state.spySort}`;
-
-  if (format === "json") {
-    const blob = new Blob([JSON.stringify(rows, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${slug}.json`;
-    a.click();
+function exportPostsRows(rows, slug, format = "csv") {
+  if (!rows?.length) {
+    toast("No posts to export");
     return;
   }
-
-  const headers = ["Rank", "Username", "URL", "Created", "OutlierScore", "VelocityScore", "ViewsPerHour", "Views", "Likes", "Comments", "VideoMP4", "Caption"];
+  if (format === "json") {
+    const blob = new Blob([JSON.stringify(rows, null, 2)], { type: "application/json" });
+    triggerBrowserDownload(URL.createObjectURL(blob), `${slug}.json`);
+    return;
+  }
+  const headers = ["Rank", "Platform", "Username", "Shortcode", "URL", "Created", "OutlierScore", "VelocityScore", "ViewsPerHour", "Views", "Likes", "Comments", "VideoMP4", "Caption"];
   const csvLines = [
     headers.join(","),
     ...rows.map((r, i) =>
       [
         i + 1,
-        r.username,
-        r.url,
-        r.createDate,
+        r.platform || "instagram",
+        r.username || "",
+        r.shortcode || r.code || "",
+        r.url || "",
+        r.createDate || "",
         r.outlierScore ?? "",
         r.velocityScore ?? "",
         r.viewsPerHour ?? "",
@@ -437,10 +590,7 @@ function exportCurrentPosts(format = "csv") {
     ),
   ];
   const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `${slug}.csv`;
-  a.click();
+  triggerBrowserDownload(URL.createObjectURL(blob), `${slug}.csv`);
 }
 
 function initCreatorSpy() {
@@ -476,14 +626,14 @@ function initCreatorSpy() {
 
   document.getElementById("spyForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const rawUser = document.getElementById("spyUsernameInput").value.trim().replace(/^@/, "");
+    const rawUser = document.getElementById("spyUsernameInput").value.trim();
     if (!rawUser) return;
     const surface = document.getElementById("spySurfaceSelect").value;
     const depth = Number(document.getElementById("spyDepthSelect").value || 60);
     const btn = document.getElementById("spySubmitBtn");
 
     btn.disabled = true;
-    setBanner(true, `Scanning @${rawUser} (${state.platform}) via Chrome extension…`);
+    setBanner(true, `Scanning ${rawUser} via Chrome extension & archiving to Master DB…`);
     try {
       const res = await apiPost("/api/sort", {
         platform: state.platform,
@@ -493,15 +643,15 @@ function initCreatorSpy() {
         depth,
       });
       if (!res?.ok) {
-        toast(res?.message || "Sort failed — check Chrome & Instagram sign-in");
+        toast(res?.message || "Sort failed — check Chrome & sign-in");
         return;
       }
       state.currentScan = res;
       document.getElementById("similarStrip").hidden = true;
       renderSpyResults();
       await loadLibrary();
-      toast(`Sorted ${res.posts.length} items for @${rawUser}`);
-    } catch (err) {
+      toast(`Sorted & permanently saved ${res.posts.length} posts for @${res.username}`);
+    } catch (_) {
       toast("Network error talking to local ViralSpy Hub");
     } finally {
       btn.disabled = false;
@@ -509,8 +659,18 @@ function initCreatorSpy() {
     }
   });
 
-  document.getElementById("exportCsvBtn").addEventListener("click", () => exportCurrentPosts("csv"));
-  document.getElementById("exportJsonBtn").addEventListener("click", () => exportCurrentPosts("json"));
+  document.getElementById("exportCsvBtn").addEventListener("click", () => {
+    const scan = state.currentScan;
+    if (scan?.posts?.length) {
+      exportPostsRows(sortPostsClient(scan.posts, state.spySort), `${scan.username}_${scan.platform || "ig"}_${state.spySort}`, "csv");
+    }
+  });
+  document.getElementById("exportJsonBtn").addEventListener("click", () => {
+    const scan = state.currentScan;
+    if (scan?.posts?.length) {
+      exportPostsRows(sortPostsClient(scan.posts, state.spySort), `${scan.username}_${scan.platform || "ig"}_${state.spySort}`, "json");
+    }
+  });
 
   document.getElementById("discoverSimilarBtn").addEventListener("click", async () => {
     const uname = state.currentScan?.username || document.getElementById("spyUsernameInput").value.trim();
@@ -551,18 +711,20 @@ function initCreatorSpy() {
     if (!state.similarAccounts.length) return;
     const seed = state.currentScan?.username;
     const picks = [
-      ...(seed ? [seed] : []),
-      ...state.similarAccounts.slice(0, 5).map((a) => a.username),
+      ...(seed ? [`https://www.instagram.com/${seed}/`] : []),
+      ...state.similarAccounts.slice(0, 5).map((a) => `https://www.instagram.com/${a.username}/`),
     ];
-    document.getElementById("radarAccountsTextarea").value = picks.join(", ");
+    document.getElementById("radarAccountsTextarea").value = picks.join("\n");
     switchView("radar");
   });
 }
 
-// ── View 2: Niche Radar ─────────────────────────────────────────────────────
+// ── View 2: Niche Radar (Parallel Multi-URL Scraper + Permanent Archive) ───
 
 function syncRadarTextareaFromSet() {
-  document.getElementById("radarAccountsTextarea").value = Array.from(state.radarSelectedHandles).join(", ");
+  document.getElementById("radarAccountsTextarea").value = Array.from(state.radarSelectedHandles)
+    .map((h) => `https://www.instagram.com/${h}/`)
+    .join("\n");
 }
 
 function renderRadarResults() {
@@ -580,9 +742,9 @@ function renderRadarResults() {
   bar.innerHTML = (run.accountSummaries || [])
     .map((s) =>
       s.ok
-        ? `<div class="radar-stat-pill"><strong>@${esc(s.username)}</strong><code>median ${fmtCompact(s.baseline)} · top ${
-            s.topOutlier ? s.topOutlier.toFixed(1) + "x" : "—"
-          }</code></div>`
+        ? `<div class="radar-stat-pill is-done"><strong>@${esc(s.username)}</strong><code>${s.scannedCount || 0} saved · median ${fmtCompact(
+            s.baseline
+          )} · top ${s.topOutlier ? s.topOutlier.toFixed(1) + "x" : "—"}</code></div>`
         : `<div class="radar-stat-pill"><strong>@${esc(s.username)}</strong><code>skipped</code></div>`
     )
     .join("");
@@ -611,19 +773,19 @@ function initNicheRadar() {
   });
 
   document.getElementById("radarExpandBtn").addEventListener("click", async () => {
-    const seed = document.getElementById("radarSeedInput").value.trim().replace(/^@/, "");
+    const seed = document.getElementById("radarSeedInput").value.trim();
     if (!seed) {
-      toast("Enter a seed Instagram handle first");
+      toast("Enter a seed profile URL or handle first");
       return;
     }
-    setBanner(true, `Discovering competitors similar to @${seed}…`);
+    setBanner(true, `Discovering competitors similar to ${seed}…`);
     try {
       const res = await apiPost("/api/similar", { username: seed });
       if (!res?.ok || !Array.isArray(res.accounts)) {
         if (Array.isArray(res?.suggestions) && res.suggestions.length) {
           const box = document.getElementById("radarDiscoveredBox");
           const pills = document.getElementById("radarDiscoveredPills");
-          box.querySelector(".control-label").textContent = `@${seed} wasn't found — click a matching Instagram handle to expand its niche:`;
+          box.querySelector(".control-label").textContent = `Account wasn't found — click a matching Instagram handle:`;
           pills.innerHTML = res.suggestions
             .map((a) => `<button type="button" class="creator-chip" data-suggest="${esc(a.username)}">@${esc(a.username)}</button>`)
             .join("");
@@ -634,21 +796,21 @@ function initNicheRadar() {
               document.getElementById("radarExpandBtn").click();
             });
           });
-          toast(`@${seed} not found — showing closest Instagram accounts`);
           return;
         }
         toast(res?.error?.message || res?.message || "Could not discover similar accounts");
         return;
       }
+      const cleanSeed = res.username || seed.replace(/^@/, "");
       const list = res.accounts.filter((a) => !a.is_private).slice(0, 18);
-      state.radarSelectedHandles = new Set([seed, ...list.slice(0, 5).map((a) => a.username)]);
+      state.radarSelectedHandles = new Set([cleanSeed, ...list.slice(0, 5).map((a) => a.username)]);
       syncRadarTextareaFromSet();
 
       const box = document.getElementById("radarDiscoveredBox");
       box.querySelector(".control-label").textContent = "Click to toggle discovered competitors:";
       const pills = document.getElementById("radarDiscoveredPills");
       pills.innerHTML = [
-        `<button type="button" class="creator-chip is-selected" data-h="${esc(seed)}">@${esc(seed)}</button>`,
+        `<button type="button" class="creator-chip is-selected" data-h="${esc(cleanSeed)}">@${esc(cleanSeed)}</button>`,
         ...list.map(
           (a) =>
             `<button type="button" class="creator-chip ${
@@ -677,30 +839,33 @@ function initNicheRadar() {
   });
 
   document.getElementById("runRadarBtn").addEventListener("click", async () => {
-    const rawText = document.getElementById("radarAccountsTextarea").value;
-    const handles = rawText
-      .split(/[\s,\n]+/)
-      .map((s) => s.replace(/^@/, "").trim().toLowerCase())
+    const rawText = document.getElementById("radarAccountsTextarea").value.trim();
+    const tokens = rawText
+      .split(/[\s,\n\r;]+/)
+      .map((s) => s.trim())
       .filter(Boolean);
-    const seed = document.getElementById("radarSeedInput").value.trim().replace(/^@/, "");
+    const seed = document.getElementById("radarSeedInput").value.trim();
 
-    if (!handles.length && !seed) {
-      toast("Add competitor handles or enter a seed creator");
+    if (!tokens.length && !seed) {
+      toast("Paste competitor profile URLs / @handles or enter a seed creator");
       return;
     }
 
     const perAccountDepth = Number(document.getElementById("radarDepthSelect").value || 36);
     const btn = document.getElementById("runRadarBtn");
     btn.disabled = true;
-    setBanner(true, `Running Niche Radar across ${handles.length || 6} creators…`);
+    setBanner(true, `Scraping ${tokens.length || 6} accounts simultaneously in parallel…`);
 
+    const fastPoll = setInterval(refreshStatus, 1200);
     try {
       const res = await apiPost("/api/niche-radar", {
-        usernames: handles,
-        seedUsername: handles.length ? "" : seed,
+        usernames: tokens,
+        urlsOrHandles: rawText,
+        seedUsername: tokens.length ? "" : seed,
         daysBack: state.radarDays,
         perAccountDepth,
         sortBy: state.radarSort,
+        concurrency: 3,
       });
       if (!res?.ok) {
         toast(res?.message || "Niche Radar failed");
@@ -709,15 +874,231 @@ function initNicheRadar() {
       state.radarRun = res;
       renderRadarResults();
       await loadLibrary();
-      toast(`Radar complete: ${res.totalPostsInWindow} Reels ranked across ${res.totalCreatorsScanned} creators`);
+      toast(
+        `Parallel Radar complete: ${res.totalPostsScrapedAndSaved || res.totalPostsInWindow} posts permanently saved across ${res.totalCreatorsScanned} creators`,
+        4500
+      );
     } finally {
+      clearInterval(fastPoll);
       btn.disabled = false;
       setBanner(false);
+      document.getElementById("radarLiveAccountsBar").hidden = true;
     }
   });
 }
 
-// ── View 3: Comment Goldmine ────────────────────────────────────────────────
+// ── View 3: Video Database (VideoBot Reproduce Packs) ───────────────────────
+
+function renderVideoDb() {
+  const packs = state.library.reproducePacks || [];
+  const emptyEl = document.getElementById("videoDbEmptyState");
+  const listEl = document.getElementById("videoDbList");
+
+  if (!packs.length) {
+    emptyEl.hidden = false;
+    listEl.innerHTML = "";
+    return;
+  }
+  emptyEl.hidden = true;
+
+  listEl.innerHTML = packs
+    .map((p) => {
+      const isExpanded = state.expandedPacks.has(p.packId);
+      const outBadge =
+        typeof p.outlierScore === "number"
+          ? `<span class="badge-outlier ${p.outlierScore >= 2.5 ? "is-hot" : ""}">${p.outlierScore.toFixed(1)}x</span>`
+          : "";
+
+      return `
+      <article class="pack-row-card" data-pack-id="${esc(p.packId)}">
+        <div class="pack-row-top">
+          <div class="pack-thumb-box">
+            <img src="${esc(p.thumbnailAssetUrl)}" alt="${esc(p.packId)}" loading="lazy" />
+          </div>
+
+          <div class="pack-meta-main">
+            <div class="pack-title-line">
+              <span class="pack-id-code">${esc(p.packId)}.zip</span>
+              ${p.username ? `<strong>@${esc(p.username)}</strong>` : ""}
+              ${outBadge}
+              <span class="mini-tag">${p.sceneCount || 0} scenes · ${Math.round(p.durationSeconds || 0)}s</span>
+              ${p.wordsPerMinute ? `<span class="mini-tag">${p.wordsPerMinute} WPM</span>` : ""}
+            </div>
+
+            ${p.spokenHook ? `<p class="pack-hook-quote">“${esc(p.spokenHook)}”</p>` : ""}
+            ${p.onScreenHook ? `<p class="pack-ocr-line">On-Screen OCR: ${esc(p.onScreenHook)}</p>` : ""}
+            <p class="pack-transcript-preview">${esc(p.transcript || "No spoken dialogue detected.")}</p>
+            <div class="pack-path-line" title="${esc(p.folderPath)}">Local folder: ${esc(p.folderPath)}</div>
+          </div>
+
+          <div class="pack-actions-col">
+            <button type="button" class="btn-primary btn-sm" data-pack-act="copy-skill">Copy Skill Prompt ✦</button>
+            <a href="${esc(p.zipUrl)}" download="${esc(p.packId)}.zip" class="btn-secondary btn-sm">Download .zip ↓</a>
+            <button type="button" class="btn-secondary btn-sm" data-pack-act="toggle-scenes">${
+              isExpanded ? "Hide Scenes ▲" : `View ${p.sceneCount || 0} Scenes ▼`
+            }</button>
+            <button type="button" class="btn-ghost-xs" data-pack-act="delete" style="align-self:flex-end;">Delete</button>
+          </div>
+        </div>
+
+        ${
+          isExpanded
+            ? `
+          <div class="pack-scenes-drawer">
+            <div class="callout-head">
+              <span class="section-eyebrow">Shot-by-Shot Breakdown (scenes.txt + frames/scene_NN.jpg)</span>
+              <a href="${esc(p.storyboardAssetUrl)}" target="_blank" rel="noopener" class="btn-ghost-xs">Open Storyboard Sheet ↗</a>
+            </div>
+            <div class="pack-scenes-grid">
+              ${(p.scenes || [])
+                .map(
+                  (sc) => `
+                <div class="scene-shot-card">
+                  <img src="${esc(sc.frameUrl)}" alt="Scene ${sc.index}" loading="lazy" />
+                  <div class="scene-shot-body">
+                    <div class="scene-shot-head">
+                      <span>Scene ${sc.index}</span>
+                      <span>${esc(sc.timeRange)}</span>
+                    </div>
+                    <p class="scene-shot-spoken">${esc(sc.spokenText || "(visual beat)")}</p>
+                    ${sc.ocrText ? `<p class="scene-shot-ocr">OCR: ${esc(sc.ocrText)}</p>` : ""}
+                  </div>
+                </div>
+              `
+                )
+                .join("")}
+            </div>
+          </div>
+        `
+            : ""
+        }
+      </article>
+      `;
+    })
+    .join("");
+
+  listEl.querySelectorAll(".pack-row-card").forEach((card) => {
+    const packId = card.dataset.packId;
+    const pack = packs.find((x) => x.packId === packId);
+    if (!pack) return;
+
+    card.querySelector('[data-pack-act="copy-skill"]')?.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(pack.skillPrompt || "");
+      toast("Copied Remake Skill prompt — paste straight into Antigravity or Claude!");
+    });
+
+    card.querySelector('[data-pack-act="toggle-scenes"]')?.addEventListener("click", () => {
+      if (state.expandedPacks.has(packId)) state.expandedPacks.delete(packId);
+      else state.expandedPacks.add(packId);
+      renderVideoDb();
+    });
+
+    card.querySelector('[data-pack-act="delete"]')?.addEventListener("click", async () => {
+      await fetch(`/api/reproduce/${encodeURIComponent(packId)}`, { method: "DELETE" });
+      state.library.reproducePacks = state.library.reproducePacks.filter((x) => x.packId !== packId);
+      updateSidebarCounts();
+      renderVideoDb();
+      toast(`Deleted ${packId}`);
+    });
+  });
+}
+
+function initVideoDbView() {
+  document.getElementById("reproduceForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const input = document.getElementById("reproduceUrlInput");
+    const url = input.value.trim();
+    if (!url) return;
+    const btn = document.getElementById("reproduceSubmitBtn");
+    const pack = await runOneShotReproduce({ url }, btn);
+    if (pack) {
+      input.value = "";
+      state.expandedPacks.add(pack.packId);
+      renderVideoDb();
+    }
+  });
+}
+
+// ── View 4: Permanent Master Database ───────────────────────────────────────
+
+let dbDebounce = null;
+async function refreshMasterDatabase() {
+  const search = document.getElementById("dbSearchInput").value.trim();
+  const username = document.getElementById("dbCreatorSelect").value;
+  const platform = document.getElementById("dbPlatformSelect").value;
+  const minOutlier = document.getElementById("dbMinOutlierSelect").value;
+  const savedOnly = document.getElementById("dbSavedOnlyCheck").checked ? "1" : "0";
+  const reproducedOnly = document.getElementById("dbReproducedOnlyCheck").checked ? "1" : "0";
+
+  const qs = new URLSearchParams({
+    search,
+    username,
+    platform,
+    minOutlier,
+    savedOnly,
+    reproducedOnly,
+    sortBy: state.dbSort,
+    limit: "300",
+  });
+
+  try {
+    const res = await fetch(`/api/db/posts?${qs.toString()}`).then((r) => r.json());
+    if (!res?.ok) return;
+    state.dbPosts = res.posts || [];
+    state.library.postsDbCount = res.totalInDb || 0;
+    updateSidebarCounts();
+
+    // Populate creator dropdown preserving current selection
+    const creatorSel = document.getElementById("dbCreatorSelect");
+    const prevVal = creatorSel.value;
+    const creators = res.creators || [];
+    creatorSel.innerHTML =
+      `<option value="">All Creators (${creators.length})</option>` +
+      creators.map((c) => `<option value="${esc(c)}" ${c === prevVal ? "selected" : ""}>@${esc(c)}</option>`).join("");
+
+    document.getElementById("dbResultCounter").textContent = `${res.filteredCount} of ${res.totalInDb} archived posts`;
+
+    const grid = document.getElementById("dbMediaGrid");
+    if (!state.dbPosts.length) {
+      grid.innerHTML = `<div class="empty-hint">No archived posts match the current filters.</div>`;
+    } else {
+      grid.innerHTML = buildMediaGridHtml(state.dbPosts);
+      wireGridEvents(grid, state.dbPosts);
+    }
+  } catch (_) {}
+}
+
+function initMasterDatabaseView() {
+  const schedule = () => {
+    if (dbDebounce) clearTimeout(dbDebounce);
+    dbDebounce = setTimeout(refreshMasterDatabase, 200);
+  };
+
+  document.getElementById("dbSearchInput").addEventListener("input", schedule);
+  document.getElementById("dbCreatorSelect").addEventListener("change", refreshMasterDatabase);
+  document.getElementById("dbPlatformSelect").addEventListener("change", refreshMasterDatabase);
+  document.getElementById("dbMinOutlierSelect").addEventListener("change", refreshMasterDatabase);
+  document.getElementById("dbSavedOnlyCheck").addEventListener("change", refreshMasterDatabase);
+  document.getElementById("dbReproducedOnlyCheck").addEventListener("change", refreshMasterDatabase);
+
+  document.querySelectorAll("#dbSortSeg .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#dbSortSeg .seg-btn").forEach((b) => b.classList.remove("is-active"));
+      btn.classList.add("is-active");
+      state.dbSort = btn.dataset.sort;
+      refreshMasterDatabase();
+    });
+  });
+
+  document.getElementById("dbExportCsvBtn").addEventListener("click", () => {
+    exportPostsRows(state.dbPosts, `viralspy_master_db_${state.dbSort}`, "csv");
+  });
+  document.getElementById("dbExportJsonBtn").addEventListener("click", () => {
+    exportPostsRows(state.dbPosts, `viralspy_master_db_${state.dbSort}`, "json");
+  });
+}
+
+// ── View 5: Comment Goldmine ────────────────────────────────────────────────
 
 function renderCommentStack(list, emptyMsg) {
   if (!Array.isArray(list) || !list.length) {
@@ -767,7 +1148,7 @@ function initCommentsView() {
   });
 }
 
-// ── View 4: Swipe Vault ─────────────────────────────────────────────────────
+// ── View 6: Swipe Vault (Two-Way Synced with Chrome) ────────────────────────
 
 function renderVault() {
   const savedGrid = document.getElementById("vaultSavedGrid");
@@ -780,7 +1161,7 @@ function renderVault() {
 
   if (state.vaultTab === "saved") {
     if (!state.library.savedPosts.length) {
-      savedGrid.innerHTML = `<div class="empty-hint">Bookmark any Reel card (☆) to build your Swipe Vault.</div>`;
+      savedGrid.innerHTML = `<div class="empty-hint">Click Save on Instagram / TikTok in Chrome or ★ on any card here — both sync automatically.</div>`;
     } else {
       savedGrid.innerHTML = buildMediaGridHtml(state.library.savedPosts);
       wireGridEvents(savedGrid, state.library.savedPosts);
@@ -856,6 +1237,43 @@ function initVault() {
 
 // ── Deep Inspector Drawer ───────────────────────────────────────────────────
 
+function renderPackInDrawer(pack) {
+  const card = document.getElementById("drawerPackCard");
+  if (!pack) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  document.getElementById("drawerPackSub").textContent = `${pack.packId}.zip · ${pack.sceneCount || 0} shot cuts · ${Math.round(
+    pack.durationSeconds || 0
+  )}s`;
+  const zipLink = document.getElementById("drawerPackZipLink");
+  zipLink.href = pack.zipUrl;
+  zipLink.setAttribute("download", `${pack.packId}.zip`);
+
+  document.getElementById("drawerCopySkillBtn").onclick = async () => {
+    await navigator.clipboard.writeText(pack.skillPrompt || "");
+    toast("Copied Remake Skill prompt to clipboard!");
+  };
+
+  document.getElementById("drawerPackScenes").innerHTML = (pack.scenes || [])
+    .map(
+      (sc) => `
+      <div class="scene-shot-card">
+        <img src="${esc(sc.frameUrl)}" alt="Scene ${sc.index}" loading="lazy" />
+        <div class="scene-shot-body">
+          <div class="scene-shot-head">
+            <span>#${sc.index}</span>
+            <span>${esc(sc.timeRange)}</span>
+          </div>
+          <p class="scene-shot-spoken">${esc(sc.spokenText || "—")}</p>
+        </div>
+      </div>
+    `
+    )
+    .join("");
+}
+
 function renderVisualHookInDrawer(vh) {
   const wrap = document.getElementById("visualHookResult");
   const callout = document.getElementById("onScreenOcrCallout");
@@ -893,9 +1311,10 @@ function renderTranscriptInDrawer(tr) {
   document.getElementById("scriptWpmPill").textContent = wpm;
 
   const segWrap = document.getElementById("transcriptSegments");
-  const segs = Array.isArray(tr.segments) && tr.segments.length
-    ? tr.segments
-    : [{ start: 0, text: tr.transcription || "" }];
+  const segs =
+    Array.isArray(tr.segments) && tr.segments.length
+      ? tr.segments
+      : [{ start: 0, text: tr.transcription || "" }];
 
   segWrap.innerHTML = segs
     .map(
@@ -929,16 +1348,20 @@ async function openInspector(post) {
     badges.push(`<span class="badge-outlier ${post.outlierScore >= 2.5 ? "is-hot" : ""}">${post.outlierScore.toFixed(1)}x</span>`);
   }
   if (post.velocityScore != null) {
-    badges.push(`<span class="mini-tag">⚡ ${post.velocityScore.toFixed(1)}x/day</span>`);
+    badges.push(`<span class="mini-tag">⚡ ${Number(post.velocityScore).toFixed(1)}x/day</span>`);
   }
   document.getElementById("drawerBadges").innerHTML = badges.join("");
 
   document.getElementById("drawerExternalLink").href = post.url || `https://www.instagram.com/reel/${code}/`;
 
+  const existingPack = getPackForCode(code);
+  const repBtn = document.getElementById("drawerReproduceBtn");
+  repBtn.textContent = existingPack ? "Download Pack .zip ✓" : "Reproduce .zip ✦";
+
   const dlBtn = document.getElementById("drawerDownloadMp4Btn");
-  if (post.videoUrl) {
+  if (post.videoUrl || existingPack?.videoAssetUrl) {
     dlBtn.hidden = false;
-    dlBtn.href = proxyMedia(post.videoUrl, true, `${post.username || "reel"}_${code}.mp4`);
+    dlBtn.href = existingPack?.videoAssetUrl || proxyMedia(post.videoUrl, true, `${post.username || "reel"}_${code}.mp4`);
   } else {
     dlBtn.hidden = true;
   }
@@ -951,17 +1374,19 @@ async function openInspector(post) {
   document.getElementById("drawerCaption").textContent = post.caption || "No caption";
 
   const videoWrap = document.getElementById("drawerVideoWrap");
-  if (post.videoUrl) {
-    videoWrap.innerHTML = `<video src="${esc(proxyMedia(post.videoUrl))}" poster="${esc(
-      post.thumbnailUrl ? proxyMedia(post.thumbnailUrl) : ""
-    )}" controls playsinline preload="metadata"></video>`;
-  } else if (post.thumbnailUrl) {
-    videoWrap.innerHTML = `<img src="${esc(proxyMedia(post.thumbnailUrl))}" alt="" />`;
+  const vidSrc = existingPack?.videoAssetUrl || (post.videoUrl ? proxyMedia(post.videoUrl) : "");
+  const posterSrc = existingPack?.thumbnailAssetUrl || (post.thumbnailUrl ? proxyMedia(post.thumbnailUrl) : "");
+
+  if (vidSrc) {
+    videoWrap.innerHTML = `<video src="${esc(vidSrc)}" poster="${esc(posterSrc)}" controls playsinline preload="metadata"></video>`;
+  } else if (posterSrc) {
+    videoWrap.innerHTML = `<img src="${esc(posterSrc)}" alt="" />`;
   } else {
     videoWrap.innerHTML = "";
   }
 
-  // Reset or hydrate cached Hook + Transcript + Comments
+  renderPackInDrawer(existingPack);
+
   const cachedVh = code ? state.library.visualHooks[code] : null;
   if (cachedVh) {
     renderVisualHookInDrawer(cachedVh);
@@ -1031,6 +1456,18 @@ function initInspectorDrawer() {
   document.getElementById("inspectorBackdrop").addEventListener("click", closeInspector);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeInspector();
+  });
+
+  document.getElementById("drawerReproduceBtn").addEventListener("click", async (ev) => {
+    if (!state.activePost) return;
+    const pack = await runOneShotReproduce(state.activePost, ev.currentTarget);
+    if (pack) {
+      renderPackInDrawer(pack);
+      const code = state.activePost.shortcode || state.activePost.code;
+      if (code && state.library.transcripts[code]) {
+        renderTranscriptInDrawer(state.library.transcripts[code]);
+      }
+    }
   });
 
   document.getElementById("extractHookBtn").addEventListener("click", triggerVisualHookExtraction);
@@ -1122,6 +1559,8 @@ initNavigation();
 syncSurfaceDropdown();
 initCreatorSpy();
 initNicheRadar();
+initVideoDbView();
+initMasterDatabaseView();
 initCommentsView();
 initVault();
 initInspectorDrawer();

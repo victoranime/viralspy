@@ -1410,28 +1410,17 @@ else if (message.command === "FacebookReelTranscribe") {
     return true; // async sendResponse
   }
   else if (message.type === "SF_SAVE_API") {
-    // The Save buttons (Instagram/save/save_api_instagram.js, Tiktok/save/save_api_tiktok.js): relay one of the three save
-    // calls to the platform's worker with the
-    // userID only the background holds. The worker decides limits, dedupe and the kill switch; its JSON goes back as is.
+    // ViralSpy Unified Two-Way Save Sync: routes Instagram & TikTok saves directly to local Studio Hub (127.0.0.1:8765)
     (async () => {
       try {
-        const got = await chrome.storage.local.get(["sort_feed_user_id", "sortFeedUser", SAVE_API_HOST_KEY]);
-        const userID = got.sort_feed_user_id || got.sortFeedUser?.userID || null;
-        if (!userID) return sendResponse({ ok: false, error: "NOT_SIGNED_IN" });
+        const got = await chrome.storage.local.get(["sort_feed_user_id", "sortFeedUser"]);
+        const userID = got.sort_feed_user_id || got.sortFeedUser?.userID || "viralspy_local_pro";
         const path = String(message.path || "").replace(/^\/+/, "");
         if (!/^posts(\/(unsave|lookup))?$/.test(path)) return sendResponse({ ok: false, error: "BAD_PATH" });
-        const override = got[SAVE_API_HOST_KEY];
-        const validOverride = typeof override === "string" && /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.sortfeed\.com(\/[a-z0-9/_-]*)?$/i.test(override);
-        let host, endpoint;
-        if (message.body?.platform === "tiktok") {
-          // TikTok: the override only picks live (an api.sortfeed.com address) or staging (anything else)
-          const live = validOverride ? /api\.sortfeed\.com/.test(override) : true;
-          host = live ? SAVE_API_TIKTOK_LIVE : SAVE_API_TIKTOK_STAGING;
-          endpoint = `${host}/${live ? SAVE_API_TIKTOK_LIVE_VERSION : "v1"}/${path}`;
-        } else {
-          host = validOverride ? override.replace(/\/$/, "") : SAVE_API_LIVE;
-          endpoint = `${host}/${host === SAVE_API_LIVE ? SAVE_API_LIVE_VERSION : "v2"}/${path}`;
-        }
+        const senderUrl = String(sender?.tab?.url || "");
+        const inferredPlatform = message.body?.platform || (/tiktok\.com/i.test(senderUrl) ? "tiktok" : "instagram");
+        const host = SAVE_API_LIVE;
+        const endpoint = `${SAVE_API_LIVE}/${SAVE_API_LIVE_VERSION}/${path}`;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 20000);
         let res;
@@ -1439,7 +1428,13 @@ else if (message.command === "FacebookReelTranscribe") {
           res = await fetch(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(Object.assign({}, message.body && typeof message.body === "object" ? message.body : {}, { sort_feed_user_id: userID })),
+            body: JSON.stringify(
+              Object.assign(
+                { platform: inferredPlatform },
+                message.body && typeof message.body === "object" ? message.body : {},
+                { sort_feed_user_id: userID }
+              )
+            ),
             signal: controller.signal,
           });
         } finally {
@@ -1447,15 +1442,80 @@ else if (message.command === "FacebookReelTranscribe") {
         }
         const data = await res.json().catch(() => null);
         if (DEBUG) console.log("[save]", path, res.status, data);
-        // A first save makes a library: the popup's avatar menu shows on the next open, no status check needed.
         if (path === "posts" && data?.ok) chrome.storage.local.set({ [SF_LIBRARY_KEY]: { userID, hasLibrary: true } });
         sendResponse(data && typeof data === "object" ? Object.assign(data, { status: res.status, host }) : { ok: false, error: "UPSTREAM", status: res.status });
       } catch (err) {
         if (DEBUG) console.warn("[save] failed", err);
-        try { sendResponse({ ok: false, error: "NETWORK" }); } catch (_) {}
+        try { sendResponse({ ok: false, error: "NETWORK", message: "Start ViralSpy Studio Hub on 127.0.0.1:8765" }); } catch (_) {}
       }
     })();
     return true; // async sendResponse
+  }
+  else if (message.type === "VS_REPRODUCE_VIDEO") {
+    // One-Shot VideoBot Reproduce Pack from Instagram / TikTok overlay button
+    (async () => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 240000);
+        let res;
+        try {
+          res = await fetch("http://127.0.0.1:8765/api/reproduce", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(message.payload || {}),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+        const data = await res.json().catch(() => null);
+        sendResponse(data && typeof data === "object" ? data : { ok: false, message: "Reproduce engine returned invalid JSON." });
+      } catch (err) {
+        try {
+          sendResponse({
+            ok: false,
+            message: "Could not reach ViralSpy Studio Hub on 127.0.0.1:8765.",
+          });
+        } catch (_) {}
+      }
+    })();
+    return true;
+  }
+  else if (message.type === "VS_INGEST_POSTS") {
+    // Auto-archive all in-page sorted posts permanently into ViralSpy Master Database
+    (async () => {
+      try {
+        const res = await fetch("http://127.0.0.1:8765/api/db/ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(message.payload || {}),
+        });
+        const data = await res.json().catch(() => ({ ok: false }));
+        sendResponse(data);
+      } catch (_) {
+        try { sendResponse({ ok: false }); } catch (_) {}
+      }
+    })();
+    return true;
+  }
+  else if (message.type === "VS_OPEN_STUDIO") {
+    (async () => {
+      const hash = String(message.hash || "#videodb");
+      const targetUrl = `http://127.0.0.1:8765/dashboard${hash.startsWith("#") ? hash : "#" + hash}`;
+      try {
+        const tabs = await chrome.tabs.query({ url: "http://127.0.0.1:8765/*" });
+        if (tabs && tabs.length > 0) {
+          await chrome.tabs.update(tabs[0].id, { url: targetUrl, active: true });
+          await chrome.windows.update(tabs[0].windowId, { focused: true });
+        } else {
+          await chrome.tabs.create({ url: targetUrl, active: true });
+        }
+        sendResponse({ ok: true });
+      } catch (e) {
+        try { sendResponse({ ok: false }); } catch (_) {}
+      }
+    })();
+    return true;
   }
   else if (message.type === "SF_LIBRARY_STATUS") {
     // The popup asks on every open (signed in only). The answer is stored, not returned: the popup draws from

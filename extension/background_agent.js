@@ -304,6 +304,10 @@ async function sfAgentRecord(result) {
 //   awaitingNext  → the last job promised another profile (job.next)  → "moving on to @…"
 // If the promised profile never arrives, the run is closed out after NEXT_WAIT_MS.
 const SF_AGENT_NEXT_WAIT_MS = 60000;
+const SF_PARALLEL_MAX = 3;
+const SF_PARALLEL_ACTIVE_TABS = new Map();
+const SF_PARALLEL_QUEUE = [];
+let sfParallelRunningCount = 0;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return;
@@ -313,7 +317,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
   if (message.type === "SF_AGENT_HELLO") {
-    const mine = !!(sender && sender.tab && sender.tab.id === SF_AGENT.tabId);
+    const senderTabId = sender && sender.tab && sender.tab.id;
+    const parallelMeta = senderTabId != null ? SF_PARALLEL_ACTIVE_TABS.get(senderTabId) : null;
+    if (parallelMeta) {
+      sendResponse({ active: true, phase: "prep", username: parallelMeta.username, label: parallelMeta.label });
+      return;
+    }
+    const mine = !!(senderTabId != null && senderTabId === SF_AGENT.tabId);
     if (mine && SF_AGENT.running && SF_AGENT.current) sendResponse({ active: true, phase: "prep", username: SF_AGENT.current.username, label: SF_AGENT.current.label });
     else if (mine && SF_AGENT.awaitingNext) sendResponse({ active: true, phase: "waiting", username: SF_AGENT.awaitingNext, label: SF_AGENT.awaitingLabel || null });
     else sendResponse({ active: false });
@@ -366,7 +376,256 @@ async function sfAgentFocusTab(requestId, port, any) {
 }
 
 function sfAgentEnqueue(job) {
+  if (job && job.parallel) {
+    sfAgentEnqueueParallel(job);
+    return;
+  }
   SF_AGENT.queue = SF_AGENT.queue.then(() => sfAgentRunJob(job)).catch(() => {});
+}
+
+function sfAgentEnqueueParallel(job) {
+  SF_PARALLEL_QUEUE.push(job);
+  sfAgentDrainParallel();
+}
+
+function sfAgentDrainParallel() {
+  while (sfParallelRunningCount < SF_PARALLEL_MAX && SF_PARALLEL_QUEUE.length > 0) {
+    const nextJob = SF_PARALLEL_QUEUE.shift();
+    sfParallelRunningCount += 1;
+    sfAgentRunParallelJob(nextJob)
+      .catch(() => {})
+      .finally(() => {
+        sfParallelRunningCount = Math.max(0, sfParallelRunningCount - 1);
+        sfAgentDrainParallel();
+      });
+  }
+}
+
+async function sfAgentRunParallelJob(job) {
+  const jobId = job.jobId;
+  const platform = String(job.kind || job.platform || "instagram").toLowerCase();
+  const cleanHandle = sfAgentCleanName(job.username);
+  const depth = Math.max(1, Math.min(SF_AGENT_CEILING.depth, parseInt(job.depth, 10) || 40));
+  const t0 = Date.now();
+  let workerTabId = null;
+
+  sfAgentSend({ type: "status", jobId, stage: "accepted", parallel: true });
+  try {
+    if (!cleanHandle) {
+      throw Object.assign(new Error("Missing username for parallel scan."), { code: "BAD_USERNAME" });
+    }
+    let targetUrl;
+    if (platform === "tiktok") {
+      targetUrl = `https://www.tiktok.com/@${encodeURIComponent(cleanHandle)}`;
+    } else if (platform === "youtube") {
+      const ytSurf = job.surface === "videos" ? "videos" : "shorts";
+      targetUrl = `https://www.youtube.com/@${encodeURIComponent(cleanHandle)}/${ytSurf}`;
+    } else {
+      if (!sfAgentValidName(cleanHandle)) {
+        throw Object.assign(new Error(`"${job.username}" isn't a valid Instagram username.`), { code: "BAD_USERNAME" });
+      }
+      targetUrl = `https://www.instagram.com/${cleanHandle}/${job.surface === "posts" ? "" : "reels/"}`;
+    }
+
+    const tab = await chrome.tabs.create({ url: targetUrl, active: false });
+    workerTabId = tab.id;
+    SF_PARALLEL_ACTIVE_TABS.set(workerTabId, { username: cleanHandle, label: `@${cleanHandle}` });
+    await sfAgentWaitForLoad(workerTabId, 32000);
+    await new Promise((r) => setTimeout(r, 1500));
+    sfAgentSend({ type: "status", jobId, stage: "tab_ready", tabId: workerTabId, parallel: true });
+
+    if (platform === "tiktok") {
+      const execRes = await chrome.scripting.executeScript({
+        target: { tabId: workerTabId },
+        world: "MAIN",
+        args: [cleanHandle, depth, String(job.sortBy || "outlier")],
+        func: async (handle, maxDepth, sortBy) => {
+          const parseCompact = (txt) => {
+            if (typeof txt === "number") return txt;
+            if (!txt) return null;
+            const s = String(txt).trim().replace(/,/g, "");
+            const m = s.match(/^(\d+(?:\.\d+)?)\s*([KMBkmb])?$/);
+            if (!m) return null;
+            let n = parseFloat(m[1]);
+            const u = (m[2] || "").toUpperCase();
+            if (u === "K") n *= 1e3;
+            else if (u === "M") n *= 1e6;
+            else if (u === "B") n *= 1e9;
+            return Math.round(n);
+          };
+          for (let i = 0; i < Math.ceil(maxDepth / 24); i++) {
+            window.scrollTo(0, document.documentElement.scrollHeight);
+            await new Promise((r) => setTimeout(r, 900));
+          }
+          const items = new Map();
+          try {
+            const el = document.getElementById("__UNIVERSAL_DATA_FOR_REHYDRATION__");
+            if (el?.textContent) {
+              const data = JSON.parse(el.textContent);
+              const walk = (o) => {
+                if (!o || typeof o !== "object") return;
+                if (o.id && o.stats && (o.stats.playCount != null || o.statsV2?.playCount != null) && o.video) {
+                  const vid = String(o.id);
+                  if (!items.has(vid)) {
+                    const createDate = o.createTime ? new Date(Number(o.createTime) * 1000).toISOString() : "";
+                    const views = Number(o.stats.playCount ?? o.statsV2?.playCount ?? 0);
+                    const ageHours = createDate ? Math.max(0.5, (Date.now() - Date.parse(createDate)) / 3600000) : null;
+                    items.set(vid, {
+                      code: vid,
+                      url: `https://www.tiktok.com/@${o.author?.uniqueId || handle}/video/${vid}`,
+                      userName: o.author?.uniqueId || handle,
+                      caption: String(o.desc || ""),
+                      viewCount: views,
+                      likesCount: Number(o.stats.diggCount ?? 0),
+                      commentsCount: Number(o.stats.commentCount ?? 0),
+                      sharesCount: Number(o.stats.shareCount ?? 0),
+                      createDate,
+                      ageHours: ageHours ? Number(ageHours.toFixed(2)) : null,
+                      viewsPerHour: ageHours ? Number((views / ageHours).toFixed(2)) : null,
+                      mediaType: 2,
+                      videoUrl: o.video?.playAddr || o.video?.downloadAddr || null,
+                      thumbnailUrl: o.video?.cover || o.video?.originCover || null,
+                      platform: "tiktok",
+                    });
+                  }
+                }
+                for (const k of Object.keys(o)) if (o[k] && typeof o[k] === "object") walk(o[k]);
+              };
+              walk(data);
+            }
+          } catch (_) {}
+          document.querySelectorAll('[data-e2e="user-post-item"]').forEach((card) => {
+            const a = card.querySelector('a[href*="/video/"]');
+            if (!a) return;
+            const href = a.getAttribute("href") || "";
+            const m = href.match(/\/video\/(\d+)/);
+            if (!m || items.has(m[1])) return;
+            const img = card.querySelector("img");
+            items.set(m[1], {
+              code: m[1],
+              url: href.startsWith("http") ? href : `https://www.tiktok.com${href}`,
+              userName: handle,
+              caption: img?.getAttribute("alt") || "",
+              viewCount: parseCompact(card.querySelector('[data-e2e="video-views"]')?.textContent || ""),
+              likesCount: null,
+              commentsCount: null,
+              createDate: "",
+              mediaType: 2,
+              thumbnailUrl: img?.getAttribute("src") || null,
+              platform: "tiktok",
+            });
+          });
+          const rows = Array.from(items.values()).slice(0, maxDepth);
+          const validViews = rows.map((r) => r.viewCount).filter((v) => typeof v === "number" && v > 0).sort((a, b) => a - b);
+          const baseline = validViews.length ? validViews[Math.floor(validViews.length / 2)] : null;
+          if (baseline && baseline > 0) {
+            rows.forEach((r) => {
+              r.outlierScore = r.viewCount != null ? Number((r.viewCount / baseline).toFixed(2)) : null;
+              if (r.viewsPerHour != null) r.velocityScore = Number(((r.viewsPerHour * 24) / baseline).toFixed(2));
+            });
+          }
+          rows.sort((a, b) => ((b.outlierScore ?? b.viewCount) || 0) - ((a.outlierScore ?? a.viewCount) || 0));
+          return {
+            ok: true,
+            platform: "tiktok",
+            username: handle,
+            surface: "videos",
+            sortBy,
+            seenInFeed: rows.length,
+            rows,
+            outlier: baseline ? { status: "ok", baseline, poolSize: validViews.length, metric: "views" } : { status: "insufficient", baseline: null, poolSize: 0, metric: "views" },
+          };
+        },
+      });
+      const out = execRes?.[0]?.result || { ok: false, error: { code: "ERROR", message: "Failed to scan TikTok profile." } };
+      sfAgentSend({ type: "result", jobId, ...out, ms: Date.now() - t0 });
+      return;
+    }
+
+    if (platform === "youtube") {
+      const ytSurf = job.surface === "videos" ? "videos" : "shorts";
+      const execRes = await chrome.scripting.executeScript({
+        target: { tabId: workerTabId },
+        world: "MAIN",
+        args: [cleanHandle, ytSurf, depth, String(job.sortBy || "outlier")],
+        func: async (handle, surface, maxDepth, sortBy) => {
+          const parseViews = (txt) => {
+            if (!txt) return null;
+            const clean = String(txt).replace(/\u00a0/g, " ").replace(/,/g, ".").trim();
+            const m = clean.match(/(\d+(?:\.\d+)?)\s*([KMBkmb]|Md|k|m)?/);
+            if (!m) return null;
+            let num = parseFloat(m[1]);
+            const suf = (m[2] || "").toUpperCase();
+            if (suf === "K") num *= 1e3;
+            else if (suf === "M") num *= 1e6;
+            else if (suf === "B" || suf === "MD") num *= 1e9;
+            return Math.round(num);
+          };
+          for (let s = 0; s < Math.ceil(maxDepth / 28); s++) {
+            window.scrollTo(0, document.documentElement.scrollHeight);
+            await new Promise((r) => setTimeout(r, 850));
+          }
+          const items = new Map();
+          const walk = (node) => {
+            if (!node || typeof node !== "object") return;
+            if (node.shortsLockupViewModel) {
+              const sl = node.shortsLockupViewModel;
+              const vid = sl?.onTap?.innertubeCommand?.reelWatchEndpoint?.videoId || sl?.entityId?.replace(/^shorts-shelf-item-/, "") || "";
+              if (vid && !items.has(vid)) {
+                items.set(vid, {
+                  code: vid,
+                  url: `https://www.youtube.com/shorts/${vid}`,
+                  userName: handle,
+                  caption: sl?.overlayMetadata?.primaryText?.content || "",
+                  viewCount: parseViews(sl?.overlayMetadata?.secondaryText?.content || sl?.accessibilityText || ""),
+                  likesCount: null,
+                  commentsCount: null,
+                  createDate: "",
+                  mediaType: 2,
+                  thumbnailUrl: sl?.thumbnail?.sources?.[sl.thumbnail.sources.length - 1]?.url || `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+                  platform: "youtube",
+                });
+              }
+            }
+            for (const k of Object.keys(node)) if (node[k] && typeof node[k] === "object") walk(node[k]);
+          };
+          try { walk(window.ytInitialData); } catch (_) {}
+          const rows = Array.from(items.values()).slice(0, maxDepth);
+          const validViews = rows.map((r) => r.viewCount).filter((v) => typeof v === "number" && v > 0).sort((a, b) => a - b);
+          const baseline = validViews.length ? validViews[Math.floor(validViews.length / 2)] : null;
+          if (baseline && baseline > 0) {
+            rows.forEach((r) => { r.outlierScore = r.viewCount != null ? Number((r.viewCount / baseline).toFixed(2)) : null; });
+          }
+          rows.sort((a, b) => ((b.outlierScore ?? b.viewCount) || 0) - ((a.outlierScore ?? a.viewCount) || 0));
+          return {
+            ok: true,
+            platform: "youtube",
+            username: handle,
+            surface,
+            sortBy,
+            seenInFeed: rows.length,
+            rows,
+            outlier: baseline ? { status: "ok", baseline, poolSize: validViews.length, metric: "views" } : { status: "insufficient", baseline: null, poolSize: 0, metric: "views" },
+          };
+        },
+      });
+      const out = execRes?.[0]?.result || { ok: false, error: { code: "ERROR", message: "Failed to scan YouTube channel." } };
+      sfAgentSend({ type: "result", jobId, ...out, ms: Date.now() - t0 });
+      return;
+    }
+
+    const tabJob = { ...job, username: cleanHandle, next: null, depth };
+    const result = await sfAgentSendJobToTab(workerTabId, tabJob);
+    await sfAgentRecord(result);
+    sfAgentSend({ type: "result", jobId, ...result });
+  } catch (e) {
+    sfAgentSend({ type: "result", jobId, ok: false, error: sfAgentErrorOf(e) });
+  } finally {
+    if (workerTabId != null) {
+      SF_PARALLEL_ACTIVE_TABS.delete(workerTabId);
+      try { await chrome.tabs.remove(workerTabId); } catch (_) {}
+    }
+  }
 }
 
 const sfAgentCleanName = (v) => String(v || "").replace(/^@/, "").trim().toLowerCase();
@@ -406,6 +665,78 @@ async function sfAgentRunJob(job) {
   try {
     if (isMediaInfo) {
       const t0 = Date.now();
+      const rawUrl = String(job.url || "");
+      const isTtMedia = job.platform === "tiktok" || /tiktok\.com/i.test(rawUrl);
+
+      if (isTtMedia) {
+        const ttTarget = rawUrl || `https://www.tiktok.com/@${job.username || "_"}/video/${job.shortcode || job.mediaId}`;
+        const tempTab = await chrome.tabs.create({ url: ttTarget, active: false });
+        try {
+          await sfAgentWaitForLoad(tempTab.id, 25000);
+          await new Promise((r) => setTimeout(r, 1200));
+          const execRes = await chrome.scripting.executeScript({
+            target: { tabId: tempTab.id },
+            world: "MAIN",
+            args: [String(job.shortcode || "")],
+            func: (targetVid) => {
+              try {
+                const el = document.getElementById("__UNIVERSAL_DATA_FOR_REHYDRATION__");
+                if (el?.textContent) {
+                  const data = JSON.parse(el.textContent);
+                  let found = null;
+                  const walk = (o) => {
+                    if (!o || typeof o !== "object" || found) return;
+                    if (o.id && o.video && (o.video.playAddr || o.video.downloadAddr)) {
+                      if (!targetVid || String(o.id) === targetVid) {
+                        found = o;
+                        return;
+                      }
+                    }
+                    for (const k of Object.keys(o)) if (o[k] && typeof o[k] === "object") walk(o[k]);
+                  };
+                  walk(data);
+                  if (found) {
+                    const vUrl = found.video?.downloadAddr || found.video?.playAddr || null;
+                    return {
+                      ok: true,
+                      platform: "tiktok",
+                      shortcode: String(found.id),
+                      mediaId: String(found.id),
+                      username: found.author?.uniqueId || "",
+                      caption: String(found.desc || ""),
+                      viewCount: Number(found.stats?.playCount ?? 0),
+                      likesCount: Number(found.stats?.diggCount ?? 0),
+                      commentsCount: Number(found.stats?.commentCount ?? 0),
+                      videoDuration: Number(found.video?.duration ?? 0),
+                      thumbnailUrl: found.video?.cover || found.video?.originCover || null,
+                      createDate: found.createTime ? new Date(Number(found.createTime) * 1000).toISOString() : "",
+                      videoUrl: vUrl,
+                      audioUrl: vUrl,
+                    };
+                  }
+                }
+                const domVid = document.querySelector("video");
+                if (domVid?.src && /^https?:/i.test(domVid.src)) {
+                  return {
+                    ok: true,
+                    platform: "tiktok",
+                    shortcode: targetVid,
+                    videoUrl: domVid.src,
+                    audioUrl: domVid.src,
+                  };
+                }
+              } catch (_) {}
+              return { ok: false, error: { code: "NOT_FOUND", message: "Could not resolve TikTok video stream." } };
+            },
+          });
+          const out = execRes?.[0]?.result || { ok: false, error: { code: "ERROR", message: "Failed to inspect TikTok video." } };
+          sfAgentSend({ type: "result", jobId, ...out, ms: Date.now() - t0 });
+        } finally {
+          try { await chrome.tabs.remove(tempTab.id); } catch (_) {}
+        }
+        return;
+      }
+
       const tabId = await sfAgentOpenTabUnless("https://www.instagram.com/");
       const execRes = await chrome.scripting.executeScript({
         target: { tabId },
@@ -445,10 +776,15 @@ async function sfAgentRunJob(job) {
           if (!audioUrl && item?.video_dash_manifest) {
             audioUrl = item.video_dash_manifest.match(/<AdaptationSet[^>]*contentType="audio"[^>]*>[\s\S]*?<BaseURL>([^<]+)<\/BaseURL>/i)?.[1]?.replace(/&amp;/g, "&") || null;
           }
-          const videoUrl = item?.video_versions?.[0]?.url || null;
+          const videoUrl = item?.video_versions?.[0]?.url || item?.carousel_media?.[0]?.video_versions?.[0]?.url || null;
           if (!audioUrl) audioUrl = videoUrl;
+          const thumbnailUrl =
+            item?.image_versions2?.candidates?.[0]?.url ||
+            item?.carousel_media?.[0]?.image_versions2?.candidates?.[0]?.url ||
+            null;
           return {
             ok: true,
+            platform: "instagram",
             shortcode: item?.code || shortcode,
             mediaId: String(item?.pk || pk),
             username: item?.user?.username || "",
@@ -457,6 +793,8 @@ async function sfAgentRunJob(job) {
             likesCount: item?.like_count ?? null,
             commentsCount: item?.comment_count ?? null,
             videoDuration: item?.video_duration ?? null,
+            createDate: item?.taken_at ? new Date(item.taken_at * 1000).toISOString() : "",
+            thumbnailUrl,
             videoUrl,
             audioUrl,
           };

@@ -17,13 +17,14 @@ Choose the package that matches how you want to use ViralSpy:
 
 ## What is included
 
-- **Unlocked Pro sorting across 4 platforms**: Sort Instagram (Reels, Posts, Keyword Search, Saved Posts, Collections), TikTok (Profiles, Search, Favorites), YouTube (Videos, Shorts), and Facebook (Reels).
-- **Full scan depths and custom date windows**: Scan 25, 50, 100, 200, 1,000, or all posts on a profile, or pick any custom calendar date range.
-- **Outlier Score calculation**: Automatically computes each creator's median baseline views or likes and ranks videos by breakout multiplier (for example `8.4x` their normal performance).
-- **Native similar accounts discovery**: Click the *Similar* button on any sorted Instagram or TikTok banner to list and export similar creators directly from the platform's recommendation graph.
-- **One-click exports**: Export any sorted feed or similar-account list to CSV, JSON, or Excel (`.xlsx`), and bulk-download watermark-free videos.
-- **100% free local Whisper transcription**: Transcribe any Reel or TikTok in the page or through your AI assistant using local Apple Silicon Metal acceleration (`whisper.cpp`), with automatic extraction of the 5-second spoken hook and full timestamped segments.
-- **8 MCP tools for Claude, Antigravity, and Cursor**: Ask your AI assistant to spy on any account, sort their best outliers, transcribe their top hooks, and find similar accounts in one prompt.
+ViralSpy combines a Manifest V3 Chrome extension, a local Studio web dashboard at `http://127.0.0.1:8765/dashboard`, and a 14-tool MCP server:
+
+- Sort Instagram (Reels, Posts, Keyword Search, Saved Posts, Collections), TikTok (Profiles, Search, Favorites), YouTube (Videos, Shorts), and Facebook (Reels) with scan depths up to 2,000 posts or custom calendar date windows.
+- Rank every video by Outlier Score (breakout multiplier against the creator's median baseline) and Views-Per-Hour velocity.
+- Paste multiple competitor URLs or handles in Niche Radar to scrape all accounts in parallel and store every scraped post permanently in your local Master Database (`posts_db.json`).
+- Click the **Reproduce** button on any Instagram or TikTok video (directly above the Save bookmark in Chrome or inside ViralSpy Studio) to generate a complete VideoBot `.zip` pack (`frames/scene_01.jpg...` at every shot cut, `scenes.txt` word-aligned via local Whisper GPU, `transcript.txt`, `storyboard.jpg`, Apple Vision OCR, `thumbnail.jpg`, and `video.mp4`).
+- Keep your Saves synchronized two-way between the in-page Save bookmark on Instagram/TikTok and the Swipe Vault inside ViralSpy Studio.
+- Mine audience questions and link requests in Comment Goldmine, or trigger all 14 tools from Claude Desktop, Antigravity, or Cursor.
 
 ---
 
