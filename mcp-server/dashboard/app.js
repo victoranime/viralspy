@@ -109,12 +109,21 @@ function triggerBrowserDownload(url, filename) {
 }
 
 async function apiPost(path, payload) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload || {}),
-  });
-  return await res.json();
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {}),
+      });
+      return await res.json();
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 1200));
+    }
+  }
+  throw lastErr;
 }
 
 // ── Theme & Navigation ──────────────────────────────────────────────────────

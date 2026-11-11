@@ -27,6 +27,14 @@ import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
 
+// Keep the local Studio Hub alive through transient socket or stream errors
+process.on("uncaughtException", (err) => {
+  console.error("[ViralSpy] Uncaught exception:", err?.message || err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[ViralSpy] Unhandled rejection:", reason?.message || reason);
+});
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 

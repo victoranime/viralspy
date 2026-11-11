@@ -101,9 +101,51 @@ for (const cfgPath of targets) {
 }
 ' "$NODE_BIN" "$INDEX_MJS"
 
-# 6. Start the background Hub & Whisper server on port 8765
-echo "[*] Starting ViralSpy local background hub on http://127.0.0.1:8765 ..."
-nohup "$NODE_BIN" "$INDEX_MJS" --daemon >/tmp/viralspy-hub.log 2>&1 &
+# 6. Start the background Hub & Whisper server permanently on port 8765
+echo "[*] Configuring permanent 24/7 ViralSpy Studio Hub on http://127.0.0.1:8765 ..."
+if [ "$(uname -s)" = "Darwin" ]; then
+  LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
+  PLIST_PATH="$LAUNCH_AGENTS_DIR/com.viralspy.hub.plist"
+  mkdir -p "$LAUNCH_AGENTS_DIR"
+  cat > "$PLIST_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.viralspy.hub</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$NODE_BIN</string>
+    <string>$INDEX_MJS</string>
+    <string>--daemon</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$MCP_DIR</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>$HOME</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$HOME/Library/Logs/viralspy-hub.log</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/Library/Logs/viralspy-hub.err.log</string>
+</dict>
+</plist>
+EOF
+  launchctl bootout "gui/$(id -u)/com.viralspy.hub" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
+  echo "[✓] macOS LaunchAgent installed & active ($PLIST_PATH)"
+else
+  nohup "$NODE_BIN" "$INDEX_MJS" --daemon >/tmp/viralspy-hub.log 2>&1 &
+fi
 sleep 1
 
 echo ""
