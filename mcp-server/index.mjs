@@ -578,7 +578,7 @@ function queryMasterPostsDb({
     totalInDb: Object.keys(postsDb).length,
     filteredCount: list.length,
     creators,
-    posts: list.slice(0, Math.max(1, Math.min(1000, Number(limit) || 250))),
+    posts: list.slice(0, Math.max(1, Math.min(20000, Number(limit) || 10000))),
   };
 }
 
@@ -1750,11 +1750,17 @@ async function runNicheRadar({
         liveRadarStatus.currentAccount = activeHandles.join(", ");
         liveRadarStatus.step = `Scraping in parallel (${liveRadarStatus.completed}/${targetSpecs.length} done): ${activeHandles.join(" · ")}`;
 
+        const resolvedRadarDepth =
+          perAccountDepth === "all" || Number(perAccountDepth) >= 10000 || Number(perAccountDepth) === 0
+            ? 10000
+            : Math.max(12, Math.min(10000, parseInt(perAccountDepth, 10) || 36));
+        const radarTimeoutMs = resolvedRadarDepth >= 10000 ? 1200000 : Math.max(240000, Math.ceil(resolvedRadarDepth / 12) * 5000 + 120000);
+
         let job;
         if (plat === "tiktok") {
-          job = { kind: "tiktok", platform: "tiktok", username: handle, surface: "videos", sortBy: "outlier", depth: perAccountDepth, parallel: true };
+          job = { kind: "tiktok", platform: "tiktok", username: handle, surface: "videos", sortBy: "outlier", depth: resolvedRadarDepth, parallel: true };
         } else if (plat === "youtube") {
-          job = { kind: "youtube", platform: "youtube", username: handle, surface: spec.surface || "shorts", sortBy: "outlier", depth: perAccountDepth, parallel: true };
+          job = { kind: "youtube", platform: "youtube", username: handle, surface: spec.surface || "shorts", sortBy: "outlier", depth: resolvedRadarDepth, parallel: true };
         } else {
           job = {
             platform: "instagram",
@@ -1762,14 +1768,14 @@ async function runNicheRadar({
             surface: spec.surface || "reels",
             sortBy: "outlier",
             outlier: "on",
-            depth: perAccountDepth,
+            depth: resolvedRadarDepth,
             parallel: true,
           };
         }
 
         let res;
         try {
-          res = await runExtensionJob(job, 240000);
+          res = await runExtensionJob(job, radarTimeoutMs);
         } catch (err) {
           res = { ok: false, error: { message: err?.message || "Scan failed" } };
         }
@@ -2309,7 +2315,9 @@ async function startLocalHub() {
           parsedTarget?.surface ||
           (platform === "youtube" ? "shorts" : platform === "tiktok" ? "videos" : "reels");
         const sortBy = body.sortBy || "outlier";
-        const depth = Math.max(12, Math.min(2000, parseInt(body.depth, 10) || 60));
+        const isAllPosts = body.depth === "all" || Number(body.depth) >= 10000 || Number(body.depth) === 0;
+        const depth = isAllPosts ? 10000 : Math.max(12, Math.min(10000, parseInt(body.depth, 10) || 60));
+        const sortTimeoutMs = isAllPosts ? 1200000 : Math.max(240000, Math.ceil(depth / 12) * 5000 + 120000);
 
         let job;
         if (platform === "youtube") {
@@ -2328,7 +2336,7 @@ async function startLocalHub() {
           };
         }
 
-        const rawRes = await runExtensionJob(job, 240000);
+        const rawRes = await runExtensionJob(job, sortTimeoutMs);
         if (!rawRes?.ok) {
           return sendJson(res, 200, {
             ok: false,
@@ -2470,7 +2478,7 @@ async function startLocalHub() {
       JSON.stringify({
         type: "welcome",
         claude: true,
-        caps: { hour: 5000, day: 20000 },
+        caps: { hour: 20000, day: 100000 },
         coolDownMs: 1800000,
         presenceMaxIdleMin: 0,
       })

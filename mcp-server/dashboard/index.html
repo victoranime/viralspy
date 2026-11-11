@@ -157,9 +157,12 @@
 
             <select id="spyDepthSelect" class="apple-select" aria-label="Scan depth">
               <option value="30">Latest 30</option>
-              <option value="60" selected>Latest 60</option>
+              <option value="60">Latest 60</option>
               <option value="120">Latest 120</option>
               <option value="250">Latest 250</option>
+              <option value="500">Latest 500</option>
+              <option value="1000">Latest 1,000</option>
+              <option value="all" selected>All Posts</option>
             </select>
 
             <button id="spySubmitBtn" type="submit" class="btn-primary">
@@ -295,9 +298,13 @@
             <div class="radar-launch-wrap">
               <select id="radarDepthSelect" class="apple-select">
                 <option value="24">24 posts / account</option>
-                <option value="36" selected>36 posts / account</option>
+                <option value="36">36 posts / account</option>
                 <option value="60">60 posts / account</option>
                 <option value="100">100 posts / account</option>
+                <option value="250">250 posts / account</option>
+                <option value="500">500 posts / account</option>
+                <option value="1000">1,000 posts / account</option>
+                <option value="all" selected>All Posts / account</option>
               </select>
               <button id="runRadarBtn" type="button" class="btn-primary">Scrape All in Parallel</button>
             </div>

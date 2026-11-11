@@ -44,8 +44,8 @@ const SF_AGENT_TAB_KEY = "sortfeed_agent_tab";        // the job tab's id — so
 // an extension release. This side — where the Instagram requests actually happen —
 // keeps only the ceilings: double the real values, and the most it will ever do no
 // matter what a server says. They only bite when a server is wrong.
-const SF_AGENT_LIMITS = { hour: 2000, day: 10000, coolDownMs: 30 * 60000, presenceMaxIdleMin: 0 };
-const SF_AGENT_CEILING = { hour: 5000, day: 20000, depth: 2000 };
+const SF_AGENT_LIMITS = { hour: 20000, day: 100000, coolDownMs: 30 * 60000, presenceMaxIdleMin: 0 };
+const SF_AGENT_CEILING = { hour: 20000, day: 100000, depth: 10000 };
 
 const SF_AGENT = {
   ws: null, tabId: null, port: 8765, enabled: true, pingTimer: null, reconnectTimer: null, queue: Promise.resolve(),
@@ -453,9 +453,12 @@ async function sfAgentRunParallelJob(job) {
             else if (u === "B") n *= 1e9;
             return Math.round(n);
           };
+          let prevH = 0, stale = 0;
           for (let i = 0; i < Math.ceil(maxDepth / 24); i++) {
             window.scrollTo(0, document.documentElement.scrollHeight);
             await new Promise((r) => setTimeout(r, 900));
+            const curH = document.documentElement.scrollHeight;
+            if (curH === prevH) { if (++stale >= 3) break; } else { stale = 0; prevH = curH; }
           }
           const items = new Map();
           try {
@@ -561,9 +564,12 @@ async function sfAgentRunParallelJob(job) {
             else if (suf === "B" || suf === "MD") num *= 1e9;
             return Math.round(num);
           };
+          let prevH = 0, stale = 0;
           for (let s = 0; s < Math.ceil(maxDepth / 28); s++) {
             window.scrollTo(0, document.documentElement.scrollHeight);
             await new Promise((r) => setTimeout(r, 850));
+            const curH = document.documentElement.scrollHeight;
+            if (curH === prevH) { if (++stale >= 3) break; } else { stale = 0; prevH = curH; }
           }
           const items = new Map();
           const walk = (node) => {
@@ -900,7 +906,7 @@ async function sfAgentRunJob(job) {
       const rawHandle = String(job.username || "").trim().replace(/^https?:\/\/(www\.)?youtube\.com\//i, "").replace(/^@/, "").split(/[/?#]/)[0];
       if (!rawHandle) throw Object.assign(new Error("Provide a YouTube channel handle (e.g. @mrbeast)."), { code: "BAD_USERNAME" });
       const ytSurface = job.surface === "videos" ? "videos" : "shorts";
-      const targetDepth = Math.max(12, Math.min(200, parseInt(job.depth, 10) || 48));
+      const targetDepth = Math.max(12, Math.min(10000, parseInt(job.depth, 10) || 48));
       const ytUrl = `https://www.youtube.com/@${encodeURIComponent(rawHandle)}/${ytSurface}`;
       const tabId = await sfAgentOpenTab(ytUrl);
       const execRes = await chrome.scripting.executeScript({
@@ -924,9 +930,12 @@ async function sfAgentRunJob(job) {
             }
             return Math.round(num);
           };
+          let prevH = 0, stale = 0;
           for (let s = 0; s < Math.ceil(depth / 28); s++) {
             window.scrollTo(0, document.documentElement.scrollHeight);
             await new Promise((r) => setTimeout(r, 900));
+            const curH = document.documentElement.scrollHeight;
+            if (curH === prevH) { if (++stale >= 3) break; } else { stale = 0; prevH = curH; }
           }
           const items = new Map();
           // Walk ytInitialData first
@@ -1041,7 +1050,7 @@ async function sfAgentRunJob(job) {
       const t0 = Date.now();
       const rawHandle = String(job.username || "").trim().replace(/^https?:\/\/(www\.)?tiktok\.com\//i, "").replace(/^@/, "").split(/[/?#]/)[0];
       if (!rawHandle) throw Object.assign(new Error("Provide a TikTok username (e.g. @khaby.lame)."), { code: "BAD_USERNAME" });
-      const targetDepth = Math.max(12, Math.min(150, parseInt(job.depth, 10) || 40));
+      const targetDepth = Math.max(12, Math.min(10000, parseInt(job.depth, 10) || 40));
       const ttUrl = `https://www.tiktok.com/@${encodeURIComponent(rawHandle)}`;
       const tabId = await sfAgentOpenTab(ttUrl);
       const execRes = await chrome.scripting.executeScript({
@@ -1062,9 +1071,12 @@ async function sfAgentRunJob(job) {
             else if (u === "B") n *= 1e9;
             return Math.round(n);
           };
+          let prevH = 0, stale = 0;
           for (let i = 0; i < Math.ceil(depth / 24); i++) {
             window.scrollTo(0, document.documentElement.scrollHeight);
             await new Promise((r) => setTimeout(r, 950));
+            const curH = document.documentElement.scrollHeight;
+            if (curH === prevH) { if (++stale >= 3) break; } else { stale = 0; prevH = curH; }
           }
           const items = new Map();
           try {

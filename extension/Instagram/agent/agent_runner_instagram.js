@@ -50,7 +50,7 @@
 
   const CFG = {
     FIRST: 12,                     // IG's own page size for both tabs
-    DEPTH_CEILING: 1000,           // the server sets each job's depth (the real limit); this is the most this side will ever scan — same number as SF_AGENT_CEILING.depth
+    DEPTH_CEILING: 10000,          // supports "All Posts" scans up to 10,000 items
     IG_APP_ID: "936619743392459",
     ASBD_ID: "359341",
     GAP_BASE_MIN_MS: 700,          // human-shaped pacing — see pacing note in the plan

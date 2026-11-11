@@ -629,7 +629,8 @@ function initCreatorSpy() {
     const rawUser = document.getElementById("spyUsernameInput").value.trim();
     if (!rawUser) return;
     const surface = document.getElementById("spySurfaceSelect").value;
-    const depth = Number(document.getElementById("spyDepthSelect").value || 60);
+    const rawDepth = document.getElementById("spyDepthSelect").value;
+    const depth = rawDepth === "all" ? "all" : Number(rawDepth || 60);
     const btn = document.getElementById("spySubmitBtn");
 
     btn.disabled = true;
@@ -851,7 +852,8 @@ function initNicheRadar() {
       return;
     }
 
-    const perAccountDepth = Number(document.getElementById("radarDepthSelect").value || 36);
+    const rawRadarDepth = document.getElementById("radarDepthSelect").value;
+    const perAccountDepth = rawRadarDepth === "all" ? "all" : Number(rawRadarDepth || 36);
     const btn = document.getElementById("runRadarBtn");
     btn.disabled = true;
     setBanner(true, `Scraping ${tokens.length || 6} accounts simultaneously in parallel…`);
@@ -1038,7 +1040,7 @@ async function refreshMasterDatabase() {
     savedOnly,
     reproducedOnly,
     sortBy: state.dbSort,
-    limit: "300",
+    limit: "10000",
   });
 
   try {
