@@ -380,7 +380,96 @@ function sfAgentEnqueue(job) {
     sfAgentEnqueueParallel(job);
     return;
   }
+  if (job && job.kind === "media_info" && job.platform !== "tiktok" && !/tiktok\.com/i.test(String(job.url || ""))) {
+    // Fast-lane: run read-only Instagram media_info immediately if an Instagram tab is already open
+    chrome.tabs.query({ url: "*://*.instagram.com/*" }).then((tabs) => {
+      if (tabs && tabs.length > 0 && tabs[0]?.id != null) {
+        sfAgentFastMediaInfo(job, tabs[0].id).catch(() => {
+          SF_AGENT.queue = SF_AGENT.queue.then(() => sfAgentRunJob(job)).catch(() => {});
+        });
+      } else {
+        SF_AGENT.queue = SF_AGENT.queue.then(() => sfAgentRunJob(job)).catch(() => {});
+      }
+    }).catch(() => {
+      SF_AGENT.queue = SF_AGENT.queue.then(() => sfAgentRunJob(job)).catch(() => {});
+    });
+    return;
+  }
   SF_AGENT.queue = SF_AGENT.queue.then(() => sfAgentRunJob(job)).catch(() => {});
+}
+
+async function sfAgentFastMediaInfo(job, tabId) {
+  const t0 = Date.now();
+  const jobId = job.jobId;
+  const execRes = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    args: [String(job.shortcode || ""), String(job.mediaId || "")],
+    func: async (shortcode, mediaIdArg) => {
+      const shortcodeToPk = (code) => {
+        const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let id = 0n;
+        for (const ch of String(code || "").trim()) {
+          const idx = alphabet.indexOf(ch);
+          if (idx < 0) return null;
+          id = id * 64n + BigInt(idx);
+        }
+        return id > 0n ? id.toString(10) : null;
+      };
+      const pk = mediaIdArg || shortcodeToPk(shortcode);
+      if (!pk) return { ok: false, error: { code: "BAD_MEDIA", message: "Invalid Instagram shortcode or media ID." } };
+      const csrf = (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || "";
+      const res = await fetch(`https://www.instagram.com/api/v1/media/${encodeURIComponent(pk)}/info/`, {
+        method: "GET",
+        credentials: "include",
+        headers: {
+          "x-ig-app-id": "936619743392459",
+          "x-asbd-id": "359341",
+          "x-requested-with": "XMLHttpRequest",
+          ...(csrf ? { "x-csrftoken": csrf } : {}),
+        },
+      });
+      const json = await res.json().catch(() => null);
+      const item = Array.isArray(json) ? json[0] : json?.items?.[0] ?? null;
+      if (!res.ok || !item) {
+        return { ok: false, error: { code: "NOT_FOUND", message: json?.message || `HTTP ${res.status}` } };
+      }
+      const prog = item?.clips_metadata?.original_sound_info?.progressive_download_url;
+      let audioUrl = prog && /^https?:\/\//i.test(prog) ? prog : null;
+      if (!audioUrl && item?.video_dash_manifest) {
+        audioUrl = item.video_dash_manifest.match(/<AdaptationSet[^>]*contentType="audio"[^>]*>[\s\S]*?<BaseURL>([^<]+)<\/BaseURL>/i)?.[1]?.replace(/&amp;/g, "&") || null;
+      }
+      const videoUrl = item?.video_versions?.[0]?.url || item?.carousel_media?.[0]?.video_versions?.[0]?.url || null;
+      if (!audioUrl) audioUrl = videoUrl;
+      const thumbnailUrl =
+        item?.image_versions2?.candidates?.[0]?.url ||
+        item?.carousel_media?.[0]?.image_versions2?.candidates?.[0]?.url ||
+        null;
+      const caption =
+        item?.caption?.text ||
+        item?.edge_media_to_caption?.edges?.[0]?.node?.text ||
+        "";
+      return {
+        ok: true,
+        platform: "instagram",
+        shortcode: item?.code || shortcode,
+        mediaId: String(item?.pk || pk),
+        username: item?.user?.username || "",
+        caption,
+        viewCount: item?.play_count ?? item?.view_count ?? null,
+        likesCount: item?.like_count ?? null,
+        commentsCount: item?.comment_count ?? null,
+        videoDuration: item?.video_duration ?? null,
+        createDate: item?.taken_at ? new Date(item.taken_at * 1000).toISOString() : "",
+        thumbnailUrl,
+        videoUrl,
+        audioUrl,
+      };
+    },
+  });
+  const out = execRes?.[0]?.result;
+  if (!out) throw new Error("Tab script unavailable");
+  sfAgentSend({ type: "result", jobId, ...out, ms: Date.now() - t0 });
 }
 
 function sfAgentEnqueueParallel(job) {
@@ -794,7 +883,7 @@ async function sfAgentRunJob(job) {
             shortcode: item?.code || shortcode,
             mediaId: String(item?.pk || pk),
             username: item?.user?.username || "",
-            caption: item?.caption?.text || "",
+            caption: item?.caption?.text || item?.edge_media_to_caption?.edges?.[0]?.node?.text || "",
             viewCount: item?.play_count ?? item?.view_count ?? null,
             likesCount: item?.like_count ?? null,
             commentsCount: item?.comment_count ?? null,

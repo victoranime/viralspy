@@ -55,6 +55,7 @@ const SCAN_HISTORY_FILE = path.join(DATA_DIR, "scan_history.json");
 const RADAR_HISTORY_FILE = path.join(DATA_DIR, "radar_history.json");
 const POSTS_DB_FILE = path.join(DATA_DIR, "posts_db.json");
 const REPRODUCE_DB_FILE = path.join(DATA_DIR, "reproduce_db.json");
+const CATEGORIES_FILE = path.join(DATA_DIR, "categories.json");
 const OCR_SWIFT_SRC = path.join(__dirname, "ocr_vision.swift");
 const OCR_BIN_PATH = path.join(DATA_DIR, "ocr_vision_bin");
 
@@ -136,6 +137,114 @@ const scanHistory = loadJsonSync(SCAN_HISTORY_FILE, []);
 const radarHistory = loadJsonSync(RADAR_HISTORY_FILE, []);
 const postsDb = loadJsonSync(POSTS_DB_FILE, {}); // keyed by `${platform}:${code}`
 const reproduceDb = loadJsonSync(REPRODUCE_DB_FILE, []); // array of reproduce packs
+
+const DEFAULT_CATEGORIES = ["Health", "Pets", "Fitness", "Beauty", "Finance", "Tech & AI", "Lifestyle"];
+const categoriesStore = loadJsonSync(CATEGORIES_FILE, {
+  categories: [...DEFAULT_CATEGORIES],
+  creatorMap: {},
+  postOverrides: {},
+});
+if (!Array.isArray(categoriesStore.categories) || !categoriesStore.categories.length) {
+  categoriesStore.categories = [...DEFAULT_CATEGORIES];
+} else {
+  for (const defCat of ["Health", "Pets"]) {
+    if (!categoriesStore.categories.some((c) => c.toLowerCase() === defCat.toLowerCase())) {
+      categoriesStore.categories.unshift(defCat);
+    }
+  }
+}
+if (!categoriesStore.creatorMap || typeof categoriesStore.creatorMap !== "object") {
+  categoriesStore.creatorMap = {};
+}
+if (!categoriesStore.postOverrides || typeof categoriesStore.postOverrides !== "object") {
+  categoriesStore.postOverrides = {};
+}
+
+function normalizeCategoryName(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const lower = s.toLowerCase();
+  if (lower === "auto" || lower === "all") return lower;
+  if (lower === "pet" || lower === "pets" || lower === "animaux" || lower === "chien" || lower === "chiens") return "Pets";
+  if (lower === "els" || lower === "health" || lower === "sante" || lower === "santé" || lower === "wellness") return "Health";
+  if (lower === "uncategorized" || lower === "other" || lower === "none") return "Uncategorized";
+  const matchExisting = categoriesStore.categories.find((c) => c.toLowerCase() === lower);
+  if (matchExisting) return matchExisting;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function ensureCategoryExists(catName) {
+  const clean = normalizeCategoryName(catName);
+  if (!clean || clean === "auto" || clean === "all" || clean === "Uncategorized") return clean;
+  if (!categoriesStore.categories.some((c) => c.toLowerCase() === clean.toLowerCase())) {
+    categoriesStore.categories.push(clean);
+  }
+  return clean;
+}
+
+const PETS_HANDLE_RE = /(furever|paws|puppy|puppies|doggo|dogs?|pittie|pitbull|rescue|hound|husky|bulldog|golden|poodle|terrier|labrador|dachshund|rottweiler|doberman|kitty|kitten|cats?|k9|canine|petcare|pets?|vet|bark|woof|meow|feline|shihtzu|retriever|shepherd|chien|chat)/i;
+const HEALTH_HANDLE_RE = /(health|healthy|wellness|vitality|remedy|remedies|rooted|herbal|herb|holistic|nutrition|longevity|gut|hormone|doctor|healer|healing|muscle|40plus|biohack|detox|immune|sante|remede)/i;
+
+const PETS_TEXT_RE = /\b(dog|dogs|puppy|puppies|cat|cats|kitten|kittens|pet|pets|vet|veterinary|veterinarian|canine|k9|furever|paws|bark|leash|kibble|collar|breed|senior dogs?|dog health|dog tips|dog treats|feline|chien|chiens|chiot|chat|chats|animaux)\b/i;
+const HEALTH_TEXT_RE = /\b(health|healthy|wellness|remedy|remedies|herbal|supplement|supplements|vitamin|vitamins|cortisol|gut|hormone|hormones|sleep|longevity|inflammation|bloating|fasting|parasite|detox|thyroid|liver|blood sugar|immune|holistic|natural cure|santé|remède|sommeil|digestion)\b/i;
+const FITNESS_TEXT_RE = /\b(gym|workout|fitness|muscle|cardio|hypertrophy|calisthenics|pilates|marathon|musculation)\b/i;
+const BEAUTY_TEXT_RE = /\b(skincare|makeup|haircare|retinol|glow|cosmetic|beauté)\b/i;
+const FINANCE_TEXT_RE = /\b(crypto|bitcoin|stocks|investing|trading|dividend|real estate|finance|immobilier)\b/i;
+const TECH_TEXT_RE = /\b(chatgpt|claude|openai|coding|saas|software|ai tools|automation)\b/i;
+
+function inferCategory(item = {}) {
+  const plat = String(item.platform || "instagram").toLowerCase();
+  const code = String(item.code || item.shortcode || "").trim();
+  const uname = String(item.username || item.userName || "").replace(/^@/, "").trim().toLowerCase();
+
+  if (code) {
+    const postKey = `${plat}:${code}`;
+    if (categoriesStore.postOverrides[postKey]) return categoriesStore.postOverrides[postKey];
+    if (categoriesStore.postOverrides[code]) return categoriesStore.postOverrides[code];
+  }
+
+  if (uname) {
+    const creatorKey = `${plat}:${uname}`;
+    if (categoriesStore.creatorMap[creatorKey]) return categoriesStore.creatorMap[creatorKey];
+    if (categoriesStore.creatorMap[uname]) return categoriesStore.creatorMap[uname];
+  }
+
+  if (item.category && item.category !== "Uncategorized" && item.category !== "auto") {
+    return normalizeCategoryName(item.category);
+  }
+
+  // Check creator username first (Pets checked BEFORE Health so @furever_healthy -> Pets, @rooted.health.tips -> Health)
+  if (uname) {
+    if (PETS_HANDLE_RE.test(uname)) {
+      categoriesStore.creatorMap[`${plat}:${uname}`] = "Pets";
+      return "Pets";
+    }
+    if (HEALTH_HANDLE_RE.test(uname)) {
+      categoriesStore.creatorMap[`${plat}:${uname}`] = "Health";
+      return "Health";
+    }
+  }
+
+  const corpus = [
+    uname,
+    item.caption || "",
+    item.transcript || "",
+    item.spokenHook || "",
+    item.onScreenHook || "",
+    code && transcriptCache[code]?.transcription ? transcriptCache[code].transcription : "",
+  ]
+    .join(" ")
+    .trim();
+
+  if (PETS_TEXT_RE.test(corpus)) return "Pets";
+  if (HEALTH_TEXT_RE.test(corpus)) return "Health";
+  if (FITNESS_TEXT_RE.test(corpus)) return "Fitness";
+  if (BEAUTY_TEXT_RE.test(corpus)) return "Beauty";
+  if (FINANCE_TEXT_RE.test(corpus)) return "Finance";
+  if (TECH_TEXT_RE.test(corpus)) return "Tech & AI";
+
+  return "Uncategorized";
+}
 
 const liveRadarStatus = {
   running: false,
@@ -233,6 +342,12 @@ function extractShortcode(input) {
   const s = String(input || "").trim();
   const igMatch = s.match(/instagram\.com\/(?:[^/?#]+\/)?(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/i);
   if (igMatch) return igMatch[1];
+  const fbMatch =
+    s.match(/facebook\.com\/reel\/(\d+)/i) ||
+    s.match(/facebook\.com\/(?:[^/?#]+\/)?videos\/(\d+)/i) ||
+    s.match(/facebook\.com\/share\/[rv]\/([A-Za-z0-9_-]+)/i) ||
+    s.match(/fb\.watch\/([A-Za-z0-9_-]+)/i);
+  if (fbMatch) return fbMatch[1];
   const ttMatch = s.match(/tiktok\.com\/@[^/?#]+\/(?:video|photo)\/(\d+)/i);
   if (ttMatch) return ttMatch[1];
   const ytMatch = s.match(/youtube\.com\/shorts\/([A-Za-z0-9_-]{8,15})/i) || s.match(/[?&]v=([A-Za-z0-9_-]{8,15})/i);
@@ -254,6 +369,32 @@ function parseVideoTarget(input, fallbackPlatform = "instagram") {
       shortcode,
       username: maybeUser,
       url: `https://www.instagram.com/reel/${shortcode}/`,
+    };
+  }
+
+  const fbReelMatch =
+    s.match(/facebook\.com\/reel\/(\d+)/i) ||
+    s.match(/facebook\.com\/(?:([^/?#]+)\/)?videos\/(\d+)/i);
+  if (fbReelMatch) {
+    const shortcode = fbReelMatch[2] || fbReelMatch[1];
+    const maybeUser = fbReelMatch[2] && fbReelMatch[1] ? fbReelMatch[1] : "";
+    return {
+      platform: "facebook",
+      shortcode,
+      username: maybeUser,
+      url: `https://www.facebook.com/reel/${shortcode}/`,
+    };
+  }
+
+  const fbShareMatch =
+    s.match(/facebook\.com\/share\/[rv]\/([A-Za-z0-9_-]+)/i) ||
+    s.match(/fb\.watch\/([A-Za-z0-9_-]+)/i);
+  if (fbShareMatch) {
+    return {
+      platform: "facebook",
+      shortcode: fbShareMatch[1],
+      username: "",
+      url: /^https?:/i.test(s) ? s : `https://${s}`,
     };
   }
 
@@ -279,12 +420,22 @@ function parseVideoTarget(input, fallbackPlatform = "instagram") {
 
   const code = extractShortcode(s);
   if (code) {
-    const plat = /^\d{15,22}$/.test(code) ? "tiktok" : fallbackPlatform;
+    const plat =
+      fallbackPlatform === "facebook"
+        ? "facebook"
+        : /^\d{18,22}$/.test(code)
+        ? "tiktok"
+        : fallbackPlatform;
     return {
       platform: plat,
       shortcode: code,
       username: "",
-      url: plat === "instagram" ? `https://www.instagram.com/reel/${code}/` : s,
+      url:
+        plat === "facebook"
+          ? `https://www.facebook.com/reel/${code}/`
+          : plat === "instagram"
+          ? `https://www.instagram.com/reel/${code}/`
+          : s,
     };
   }
   return null;
@@ -292,16 +443,24 @@ function parseVideoTarget(input, fallbackPlatform = "instagram") {
 
 function normalizeSavedPost(raw, fallbackPlatform = "instagram") {
   if (!raw || typeof raw !== "object") return null;
-  const code = String(raw.code || raw.shortcode || raw.reel_code || raw.id || "").trim();
+  const code = String(raw.code || raw.shortcode || raw.reel_code || raw.VideoID || raw.id || "").trim();
   if (!code) return null;
 
   const platform = String(
-    raw.platform || (raw.url && /tiktok\.com/i.test(raw.url) ? "tiktok" : fallbackPlatform)
+    raw.platform ||
+      (raw.url && /tiktok\.com/i.test(raw.url)
+        ? "tiktok"
+        : raw.url && /facebook\.com|fb\.watch/i.test(raw.url)
+        ? "facebook"
+        : raw.VideoID
+        ? "facebook"
+        : fallbackPlatform)
   ).toLowerCase();
 
   const username = String(
     raw.username ||
       raw.userName ||
+      raw.Profile ||
       raw.creator?.handle ||
       raw.creator?.username ||
       raw.profile ||
@@ -310,19 +469,21 @@ function normalizeSavedPost(raw, fallbackPlatform = "instagram") {
     .replace(/^@/, "")
     .trim();
 
-  let createDate = raw.createDate || "";
+  let createDate = raw.createDate || raw.Date || "";
   if (!createDate && raw.posted_at) {
     const ms = Number(raw.posted_at) > 1e11 ? Number(raw.posted_at) : Number(raw.posted_at) * 1000;
     if (Number.isFinite(ms) && ms > 0) createDate = new Date(ms).toISOString();
   }
 
-  const views = raw.views ?? raw.viewCount ?? raw.metrics?.views ?? null;
-  const likes = raw.likes ?? raw.likesCount ?? raw.metrics?.likes ?? null;
-  const comments = raw.comments ?? raw.commentsCount ?? raw.metrics?.comments ?? null;
-  const shares = raw.shares ?? raw.sharesCount ?? raw.metrics?.shares ?? null;
+  const views = raw.views ?? raw.viewCount ?? raw.Views ?? raw.metrics?.views ?? null;
+  const likes = raw.likes ?? raw.likesCount ?? raw.Likes ?? raw.metrics?.likes ?? null;
+  const comments = raw.comments ?? raw.commentsCount ?? raw.Comments ?? raw.metrics?.comments ?? null;
+  const shares = raw.shares ?? raw.sharesCount ?? raw.Shares ?? raw.metrics?.shares ?? null;
   const outlierScore =
     typeof raw.outlierScore === "number"
       ? raw.outlierScore
+      : typeof raw.OutlierScore === "number"
+      ? raw.OutlierScore
       : typeof raw.outlier === "number"
       ? raw.outlier
       : null;
@@ -330,6 +491,7 @@ function normalizeSavedPost(raw, fallbackPlatform = "instagram") {
   const thumbnailUrl =
     raw.thumbnailUrl ||
     raw.thumbnailSmallUrl ||
+    raw.Thumb ||
     raw.media?.cover_url ||
     raw.cover_url ||
     null;
@@ -344,6 +506,8 @@ function normalizeSavedPost(raw, fallbackPlatform = "instagram") {
     raw.url ||
     (platform === "tiktok"
       ? `https://www.tiktok.com/@${username || "_"}/video/${code}`
+      : platform === "facebook"
+      ? `https://www.facebook.com/reel/${code}/`
       : `https://www.instagram.com/reel/${code}/`);
 
   const createdMs = createDate ? Date.parse(createDate) : NaN;
@@ -354,7 +518,7 @@ function normalizeSavedPost(raw, fallbackPlatform = "instagram") {
     raw.viewsPerHour ??
     (ageHours != null && (views ?? likes) != null ? Number((+(views ?? likes) / ageHours).toFixed(2)) : null);
 
-  return {
+  const itemObj = {
     platform,
     code,
     shortcode: code,
@@ -362,7 +526,7 @@ function normalizeSavedPost(raw, fallbackPlatform = "instagram") {
     url,
     username,
     creatorName: raw.creator?.name || "",
-    caption: String(raw.caption || "").trim(),
+    caption: String(raw.caption || raw.Caption || "").trim(),
     createDate,
     ageHours,
     views: views != null ? Number(views) : null,
@@ -379,6 +543,8 @@ function normalizeSavedPost(raw, fallbackPlatform = "instagram") {
     audioUrl: raw.audioUrl || videoUrl || null,
     savedAt: raw.savedAt || new Date().toISOString(),
   };
+  itemObj.category = inferCategory({ ...itemObj, category: raw.category });
+  return itemObj;
 }
 
 function isCodeSaved(code) {
@@ -402,6 +568,15 @@ async function upsertPostsToDb(items, context = {}) {
   const nowIso = new Date().toISOString();
   let count = 0;
 
+  if (context.category && context.category !== "auto" && context.username) {
+    const cleanCat = ensureCategoryExists(context.category);
+    const plat = String(context.platform || "instagram").toLowerCase();
+    const uname = String(context.username).replace(/^@/, "").trim().toLowerCase();
+    if (cleanCat && uname) {
+      categoriesStore.creatorMap[`${plat}:${uname}`] = cleanCat;
+    }
+  }
+
   for (const raw of items) {
     const norm = normalizeSavedPost(raw, context.platform || raw?.platform || "instagram");
     if (!norm || !norm.code) continue;
@@ -414,14 +589,30 @@ async function upsertPostsToDb(items, context = {}) {
       velocityScore = Number(((norm.viewsPerHour * 24) / baseline).toFixed(2));
     }
 
+    const mergedUsername = norm.username || context.username || prev.username || "";
+    const mergedCaption = norm.caption || prev.caption || "";
+    const resolvedCategory = inferCategory({
+      platform: norm.platform,
+      code: norm.code,
+      username: mergedUsername,
+      caption: mergedCaption,
+      category:
+        context.category && context.category !== "auto"
+          ? context.category
+          : norm.category && norm.category !== "Uncategorized"
+          ? norm.category
+          : prev.category,
+    });
+
     postsDb[key] = {
       key,
       platform: norm.platform,
       code: norm.code,
       shortcode: norm.code,
       url: norm.url || prev.url || "",
-      username: norm.username || context.username || prev.username || "",
-      caption: norm.caption || prev.caption || "",
+      username: mergedUsername,
+      category: resolvedCategory,
+      caption: mergedCaption,
       createDate: norm.createDate || prev.createDate || "",
       ageHours: norm.ageHours ?? prev.ageHours ?? null,
       views: norm.views ?? prev.views ?? null,
@@ -445,13 +636,17 @@ async function upsertPostsToDb(items, context = {}) {
 
   if (count > 0 && isPrimaryHub) {
     await saveJson(POSTS_DB_FILE, postsDb);
+    await saveJson(CATEGORIES_FILE, categoriesStore);
   }
   return count;
 }
 
-// Bootstrap Master Posts DB from existing scanHistory, radarHistory, and savedLibrary on startup
+// Bootstrap Master Posts DB + sync captions & categories across all stores on startup
 function bootstrapPostsDbFromHistorySync() {
-  let added = 0;
+  let dbDirty = false;
+  let reproduceDirty = false;
+  let scansDirty = false;
+
   for (const scan of scanHistory) {
     for (const p of scan?.posts || []) {
       const norm = normalizeSavedPost(p, scan.platform || "instagram");
@@ -466,7 +661,7 @@ function bootstrapPostsDbFromHistorySync() {
           firstScrapedAt: scan.scannedAt || new Date().toISOString(),
           lastScrapedAt: scan.scannedAt || new Date().toISOString(),
         };
-        added += 1;
+        dbDirty = true;
       }
     }
   }
@@ -483,7 +678,7 @@ function bootstrapPostsDbFromHistorySync() {
           firstScrapedAt: run.createdAt || new Date().toISOString(),
           lastScrapedAt: run.createdAt || new Date().toISOString(),
         };
-        added += 1;
+        dbDirty = true;
       }
     }
   }
@@ -497,21 +692,318 @@ function bootstrapPostsDbFromHistorySync() {
         firstScrapedAt: p.savedAt || new Date().toISOString(),
         lastScrapedAt: p.savedAt || new Date().toISOString(),
       };
-      added += 1;
+      dbDirty = true;
     }
   }
-  if (added > 0) {
-    try {
-      fs.writeFileSync(POSTS_DB_FILE, JSON.stringify(postsDb, null, 2), "utf8");
-    } catch (_) {}
+
+  // Sync captions & categories from Reproduce Packs into postsDb and write caption.txt if missing
+  for (const pack of reproduceDb) {
+    const cat = inferCategory(pack);
+    if (pack.category !== cat) {
+      pack.category = cat;
+      reproduceDirty = true;
+    }
+    if (pack.folderPath && pack.caption) {
+      const capTxtFile = path.join(pack.folderPath, "caption.txt");
+      try {
+        if (fs.existsSync(pack.folderPath) && !fs.existsSync(capTxtFile)) {
+          fs.writeFileSync(capTxtFile, String(pack.caption) + "\n", "utf8");
+        }
+      } catch (_) {}
+    }
+    const key = `${pack.platform || "instagram"}:${pack.shortcode}`;
+    if (postsDb[key]) {
+      if (pack.caption && !postsDb[key].caption) {
+        postsDb[key].caption = pack.caption;
+        dbDirty = true;
+      }
+      if (pack.username && !postsDb[key].username) {
+        postsDb[key].username = pack.username;
+        dbDirty = true;
+      }
+    }
   }
+
+  // Ensure every post in postsDb has a resolved category
+  for (const entry of Object.values(postsDb)) {
+    const cat = inferCategory(entry);
+    if (entry.category !== cat) {
+      entry.category = cat;
+      dbDirty = true;
+    }
+  }
+
+  // Sync enriched captions & categories back into scanHistory and radarHistory
+  for (const scan of scanHistory) {
+    const plat = scan.platform || "instagram";
+    scan.category = inferCategory({ platform: plat, username: scan.username });
+    for (const p of scan?.posts || []) {
+      const code = p.shortcode || p.code;
+      const dbHit = code ? postsDb[`${plat}:${code}`] : null;
+      if (dbHit?.caption && !p.caption) {
+        p.caption = dbHit.caption;
+        scansDirty = true;
+      }
+      const pCat = dbHit?.category || inferCategory({ ...p, platform: plat, username: p.username || scan.username });
+      if (p.category !== pCat) {
+        p.category = pCat;
+        scansDirty = true;
+      }
+    }
+  }
+
+  for (const run of radarHistory) {
+    for (const p of run?.leaderboard || []) {
+      const plat = p.platform || "instagram";
+      const code = p.shortcode || p.code;
+      const dbHit = code ? postsDb[`${plat}:${code}`] : null;
+      if (dbHit?.caption && !p.caption) {
+        p.caption = dbHit.caption;
+      }
+      p.category = dbHit?.category || inferCategory(p);
+    }
+  }
+
+  try {
+    fs.writeFileSync(CATEGORIES_FILE, JSON.stringify(categoriesStore, null, 2), "utf8");
+    if (dbDirty) fs.writeFileSync(POSTS_DB_FILE, JSON.stringify(postsDb, null, 2), "utf8");
+    if (reproduceDirty) fs.writeFileSync(REPRODUCE_DB_FILE, JSON.stringify(reproduceDb, null, 2), "utf8");
+    if (scansDirty) fs.writeFileSync(SCAN_HISTORY_FILE, JSON.stringify(scanHistory, null, 2), "utf8");
+  } catch (_) {}
 }
 bootstrapPostsDbFromHistorySync();
+
+function getCategoriesSummary() {
+  const dbCounts = { all: Object.keys(postsDb).length };
+  const videoDbCounts = { all: reproduceDb.length };
+
+  for (const cat of categoriesStore.categories) {
+    dbCounts[cat] = 0;
+    videoDbCounts[cat] = 0;
+  }
+  dbCounts.Uncategorized = 0;
+  videoDbCounts.Uncategorized = 0;
+
+  for (const p of Object.values(postsDb)) {
+    const cat = p.category || inferCategory(p) || "Uncategorized";
+    dbCounts[cat] = (dbCounts[cat] || 0) + 1;
+  }
+
+  for (const pack of reproduceDb) {
+    const cat = pack.category || inferCategory(pack) || "Uncategorized";
+    videoDbCounts[cat] = (videoDbCounts[cat] || 0) + 1;
+  }
+
+  return {
+    categories: categoriesStore.categories,
+    creatorMap: categoriesStore.creatorMap,
+    dbCounts,
+    videoDbCounts,
+  };
+}
+
+async function propagatePostEnrichment(platform, code, patch = {}) {
+  const plat = String(platform || "instagram").toLowerCase();
+  const cleanCode = String(code || "").trim();
+  if (!cleanCode) return null;
+  const key = `${plat}:${cleanCode}`;
+
+  const existing = postsDb[key] || {
+    key,
+    platform: plat,
+    code: cleanCode,
+    shortcode: cleanCode,
+    url: plat === "instagram" ? `https://www.instagram.com/reel/${cleanCode}/` : "",
+    firstScrapedAt: new Date().toISOString(),
+  };
+
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== undefined && v !== null && v !== "") {
+      existing[k] = v;
+    }
+  }
+  existing.category = patch.category ? ensureCategoryExists(patch.category) : inferCategory(existing);
+  existing.lastScrapedAt = new Date().toISOString();
+  postsDb[key] = existing;
+
+  // Propagate into scanHistory
+  let scansChanged = false;
+  for (const scan of scanHistory) {
+    for (const p of scan?.posts || []) {
+      if ((p.shortcode || p.code) === cleanCode) {
+        if (existing.caption) p.caption = existing.caption;
+        if (existing.username && !p.username) p.username = existing.username;
+        if (existing.videoUrl) p.videoUrl = existing.videoUrl;
+        if (existing.thumbnailUrl && !p.thumbnailUrl) p.thumbnailUrl = existing.thumbnailUrl;
+        if (existing.views != null && p.views == null) p.views = existing.views;
+        if (existing.likes != null && p.likes == null) p.likes = existing.likes;
+        if (existing.comments != null && p.comments == null) p.comments = existing.comments;
+        p.category = existing.category;
+        scansChanged = true;
+      }
+    }
+  }
+
+  // Propagate into radarHistory
+  let radarChanged = false;
+  for (const run of radarHistory) {
+    for (const p of run?.leaderboard || []) {
+      if ((p.shortcode || p.code) === cleanCode) {
+        if (existing.caption) p.caption = existing.caption;
+        if (existing.username && !p.username) p.username = existing.username;
+        if (existing.videoUrl) p.videoUrl = existing.videoUrl;
+        p.category = existing.category;
+        radarChanged = true;
+      }
+    }
+  }
+
+  // Propagate into savedLibrary
+  let savedChanged = false;
+  for (const p of savedLibrary.posts) {
+    if ((p.shortcode || p.code) === cleanCode) {
+      if (existing.caption) p.caption = existing.caption;
+      if (existing.username && !p.username) p.username = existing.username;
+      if (existing.videoUrl) p.videoUrl = existing.videoUrl;
+      if (existing.thumbnailUrl && !p.thumbnailUrl) p.thumbnailUrl = existing.thumbnailUrl;
+      if (existing.views != null && p.views == null) p.views = existing.views;
+      if (existing.likes != null && p.likes == null) p.likes = existing.likes;
+      if (existing.comments != null && p.comments == null) p.comments = existing.comments;
+      p.category = existing.category;
+      savedChanged = true;
+    }
+  }
+
+  // Propagate into reproduceDb
+  let packChanged = false;
+  for (const pack of reproduceDb) {
+    if (pack.shortcode === cleanCode) {
+      if (existing.caption && !pack.caption) pack.caption = existing.caption;
+      if (existing.username && !pack.username) pack.username = existing.username;
+      pack.category = existing.category;
+      packChanged = true;
+      if (pack.folderPath && fs.existsSync(pack.folderPath)) {
+        if (pack.caption) {
+          await fsp.writeFile(path.join(pack.folderPath, "caption.txt"), String(pack.caption) + "\n", "utf8").catch(() => {});
+        }
+        await fsp.writeFile(path.join(pack.folderPath, "metadata.json"), JSON.stringify(pack, null, 2), "utf8").catch(() => {});
+      }
+    }
+  }
+
+  if (isPrimaryHub) {
+    await saveJson(POSTS_DB_FILE, postsDb);
+    await saveJson(CATEGORIES_FILE, categoriesStore);
+    if (scansChanged) await saveJson(SCAN_HISTORY_FILE, scanHistory);
+    if (radarChanged) await saveJson(RADAR_HISTORY_FILE, radarHistory);
+    if (savedChanged) await saveJson(SAVED_LIBRARY_FILE, savedLibrary);
+    if (packChanged) await saveJson(REPRODUCE_DB_FILE, reproduceDb);
+  }
+
+  return existing;
+}
+
+async function assignCategoryAndPropagate({
+  category,
+  platform = "instagram",
+  username = "",
+  shortcode = "",
+  applyToCreator = true,
+}) {
+  const cleanCat = ensureCategoryExists(category);
+  if (!cleanCat) return { ok: false, message: "Invalid category name" };
+
+  const plat = String(platform || "instagram").toLowerCase();
+  const cleanUser = String(username || "").replace(/^@/, "").trim().toLowerCase();
+  const cleanCode = String(shortcode || "").trim();
+
+  if (cleanCode) {
+    categoriesStore.postOverrides[`${plat}:${cleanCode}`] = cleanCat;
+  }
+  if (applyToCreator && cleanUser) {
+    categoriesStore.creatorMap[`${plat}:${cleanUser}`] = cleanCat;
+    // Clear individual post overrides for this creator unless it's the target post
+    for (const k of Object.keys(categoriesStore.postOverrides)) {
+      const dbEntry = postsDb[k];
+      if (dbEntry && (dbEntry.username || "").toLowerCase() === cleanUser && dbEntry.code !== cleanCode) {
+        delete categoriesStore.postOverrides[k];
+      }
+    }
+  }
+
+  let updatedPosts = 0;
+  for (const entry of Object.values(postsDb)) {
+    const matchesPost = cleanCode && entry.code === cleanCode && entry.platform === plat;
+    const matchesCreator = applyToCreator && cleanUser && (entry.username || "").toLowerCase() === cleanUser;
+    if (matchesPost || matchesCreator) {
+      entry.category = cleanCat;
+      updatedPosts += 1;
+    }
+  }
+
+  for (const pack of reproduceDb) {
+    const matchesPost = cleanCode && pack.shortcode === cleanCode;
+    const matchesCreator = applyToCreator && cleanUser && (pack.username || "").toLowerCase() === cleanUser;
+    if (matchesPost || matchesCreator) {
+      pack.category = cleanCat;
+      if (pack.folderPath && fs.existsSync(pack.folderPath)) {
+        await fsp.writeFile(path.join(pack.folderPath, "metadata.json"), JSON.stringify(pack, null, 2), "utf8").catch(() => {});
+      }
+    }
+  }
+
+  for (const scan of scanHistory) {
+    if (applyToCreator && cleanUser && (scan.username || "").toLowerCase() === cleanUser) {
+      scan.category = cleanCat;
+    }
+    for (const p of scan?.posts || []) {
+      const pCode = p.shortcode || p.code;
+      if ((cleanCode && pCode === cleanCode) || (applyToCreator && cleanUser && ((p.username || scan.username || "").toLowerCase() === cleanUser))) {
+        p.category = cleanCat;
+      }
+    }
+  }
+
+  for (const run of radarHistory) {
+    for (const p of run?.leaderboard || []) {
+      const pCode = p.shortcode || p.code;
+      if ((cleanCode && pCode === cleanCode) || (applyToCreator && cleanUser && (p.username || "").toLowerCase() === cleanUser)) {
+        p.category = cleanCat;
+      }
+    }
+  }
+
+  for (const p of savedLibrary.posts) {
+    const pCode = p.shortcode || p.code;
+    if ((cleanCode && pCode === cleanCode) || (applyToCreator && cleanUser && (p.username || "").toLowerCase() === cleanUser)) {
+      p.category = cleanCat;
+    }
+  }
+
+  if (isPrimaryHub) {
+    await Promise.all([
+      saveJson(CATEGORIES_FILE, categoriesStore),
+      saveJson(POSTS_DB_FILE, postsDb),
+      saveJson(REPRODUCE_DB_FILE, reproduceDb),
+      saveJson(SCAN_HISTORY_FILE, scanHistory),
+      saveJson(RADAR_HISTORY_FILE, radarHistory),
+      saveJson(SAVED_LIBRARY_FILE, savedLibrary),
+    ]);
+  }
+
+  return {
+    ok: true,
+    category: cleanCat,
+    updatedPosts,
+    ...getCategoriesSummary(),
+  };
+}
 
 function queryMasterPostsDb({
   search = "",
   username = "",
   platform = "all",
+  category = "all",
   minOutlier = 0,
   savedOnly = false,
   reproducedOnly = false,
@@ -520,13 +1012,17 @@ function queryMasterPostsDb({
 } = {}) {
   const q = String(search || "").trim().toLowerCase();
   const uFilter = String(username || "").replace(/^@/, "").trim().toLowerCase();
+  const catFilter = String(category || "all").trim();
   const minOut = Number(minOutlier || 0);
 
   let list = Object.values(postsDb).map((entry) => {
     const pack = findPackForCode(entry.code);
     const localThumb = pack ? `/api/reproduce/asset/${pack.packId}/thumbnail.jpg` : null;
+    const resolvedCat = entry.category || inferCategory(entry);
     return {
       ...entry,
+      category: resolvedCat,
+      caption: entry.caption || pack?.caption || "",
       thumbnailUrl: localThumb || entry.thumbnailUrl,
       isSaved: isCodeSaved(entry.code),
       hasCachedTranscript: !!transcriptCache[entry.code],
@@ -538,6 +1034,10 @@ function queryMasterPostsDb({
 
   if (platform && platform !== "all") {
     list = list.filter((p) => p.platform === platform);
+  }
+  if (catFilter && catFilter.toLowerCase() !== "all") {
+    const normCat = normalizeCategoryName(catFilter);
+    list = list.filter((p) => (p.category || "Uncategorized").toLowerCase() === normCat.toLowerCase());
   }
   if (uFilter) {
     list = list.filter((p) => (p.username || "").toLowerCase().includes(uFilter));
@@ -556,6 +1056,7 @@ function queryMasterPostsDb({
       (p) =>
         (p.username || "").toLowerCase().includes(q) ||
         (p.caption || "").toLowerCase().includes(q) ||
+        (p.category || "").toLowerCase().includes(q) ||
         (p.code || "").toLowerCase().includes(q) ||
         String(transcriptCache[p.code]?.transcription || "").toLowerCase().includes(q)
     );
@@ -582,10 +1083,14 @@ function queryMasterPostsDb({
     )
   ).sort();
 
+  const catSummary = getCategoriesSummary();
+
   return {
     totalInDb: Object.keys(postsDb).length,
     filteredCount: list.length,
     creators,
+    categories: catSummary.categories,
+    categoryCounts: catSummary.dbCounts,
     posts: list.slice(0, Math.max(1, Math.min(20000, Number(limit) || 10000))),
   };
 }
@@ -619,12 +1124,17 @@ function extractHookFromSegments(segments, hookSeconds = 5.0) {
 }
 
 async function downloadMediaToFile(url, destPath) {
+  const referer = url.includes("tiktok")
+    ? "https://www.tiktok.com/"
+    : url.includes("facebook")
+    ? "https://www.facebook.com/"
+    : "https://www.instagram.com/";
   const res = await fetch(url, {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       Accept: "*/*",
-      Referer: url.includes("tiktok") ? "https://www.tiktok.com/" : "https://www.instagram.com/",
+      Referer: referer,
     },
   });
   if (!res.ok) {
@@ -632,6 +1142,211 @@ async function downloadMediaToFile(url, destPath) {
   }
   const arrayBuffer = await res.arrayBuffer();
   await fsp.writeFile(destPath, Buffer.from(arrayBuffer));
+}
+
+// Direct 2026 Facebook Comet Reel Resolver (HTML <script type="application/json"> + yt-dlp fallback)
+async function resolveFacebookReelDirect(shortcodeOrUrl) {
+  const raw = String(shortcodeOrUrl || "").trim();
+  if (!raw) return { ok: false, message: "Missing Facebook Reel ID or URL." };
+
+  const parsed = parseVideoTarget(raw, "facebook");
+  let code = parsed?.shortcode || (/^\d+$/.test(raw) ? raw : "");
+  const targetUrl =
+    /^https?:\/\//i.test(raw)
+      ? raw
+      : parsed?.url || (code ? `https://www.facebook.com/reel/${code}/` : "");
+
+  if (!targetUrl) return { ok: false, message: "Invalid Facebook Reel target." };
+
+  let videoUrl = null;
+  let audioUrl = null;
+  let thumbnailUrl = null;
+  let username = "";
+  let caption = "";
+  let likes = null;
+  let comments = null;
+  let views = null;
+  let durationSec = null;
+
+  try {
+    const resp = await fetch(targetUrl, {
+      redirect: "follow",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+      },
+    });
+    if (resp.url) {
+      const mFinal = resp.url.match(/\/reel\/(\d+)/i) || resp.url.match(/\/videos\/(\d+)/i);
+      if (mFinal) code = mFinal[1];
+    }
+    if (resp.ok) {
+      const html = await resp.text();
+      const scriptRe = /<script[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/gi;
+      let match;
+      while ((match = scriptRe.exec(html)) !== null) {
+        const txt = match[1] || "";
+        if (
+          !/(browser_native_|playable_url|progressive_url|hd_src|sd_src|dash_manifest|short_form_video_context|creation_story)/.test(
+            txt
+          )
+        ) {
+          continue;
+        }
+        let parsedJson;
+        try {
+          parsedJson = JSON.parse(txt);
+        } catch (_) {
+          continue;
+        }
+
+        const walk = (node) => {
+          if (!node || typeof node !== "object") return;
+          if (Array.isArray(node)) {
+            for (const item of node) walk(item);
+            return;
+          }
+
+          const nodeId = String(node.id || node.video_id || "");
+          const matchesTarget = !code || !nodeId || nodeId === code;
+
+          // Video & audio delivery fields
+          const hd =
+            node.browser_native_hd_url ||
+            node.playable_url_quality_hd ||
+            node.hd_src_no_ratelimit ||
+            node.hd_src ||
+            (Array.isArray(node.progressive_urls)
+              ? node.progressive_urls.find((p) => p?.metadata?.quality === "HD")?.progressive_url
+              : null);
+          const sd =
+            node.browser_native_sd_url ||
+            node.playable_url ||
+            node.sd_src_no_ratelimit ||
+            node.sd_src ||
+            (Array.isArray(node.progressive_urls)
+              ? node.progressive_urls.find((p) => p?.metadata?.quality === "SD")?.progressive_url ||
+                node.progressive_urls.find((p) => p?.progressive_url)?.progressive_url
+              : null);
+
+          if ((hd || sd) && (!videoUrl || matchesTarget)) {
+            videoUrl = hd || sd || videoUrl;
+          }
+
+          const dashXml = node.dash_manifest_xml_string || node.dash_manifest || node.manifest_xml;
+          if (typeof dashXml === "string" && !audioUrl) {
+            const audioMatch = dashXml.match(
+              /<AdaptationSet[^>]*contentType="audio"[^>]*>[\s\S]*?<BaseURL>([^<]+)<\/BaseURL>/i
+            );
+            if (audioMatch?.[1]) {
+              audioUrl = audioMatch[1].replace(/&amp;/g, "&");
+            }
+          }
+
+          if (!thumbnailUrl) {
+            thumbnailUrl =
+              node.preferred_thumbnail?.image?.uri ||
+              node.thumbnailImage?.uri ||
+              node.first_frame_thumbnail ||
+              null;
+          }
+          if (durationSec == null && typeof node.playable_duration_in_ms === "number" && node.playable_duration_in_ms > 0) {
+            durationSec = Number((node.playable_duration_in_ms / 1000).toFixed(2));
+          }
+          if (durationSec == null && typeof node.length_in_second === "number" && node.length_in_second > 0) {
+            durationSec = Number(node.length_in_second);
+          }
+
+          // Creator & Caption from creation_story / short_form_video_context
+          if (!username && node.video_owner?.name) {
+            username = String(node.video_owner.name).trim();
+          } else if (!username && node.short_form_video_context?.video_owner?.name) {
+            username = String(node.short_form_video_context.video_owner.name).trim();
+          }
+
+          if (!caption && node.creation_story?.message?.text) {
+            caption = String(node.creation_story.message.text).trim();
+          } else if (!caption && node.short_form_video_context && node.message?.text) {
+            caption = String(node.message.text).trim();
+          }
+
+          if (likes == null && typeof node.unified_reactors?.count === "number") {
+            likes = node.unified_reactors.count;
+          } else if (likes == null && typeof node.likers?.count === "number") {
+            likes = node.likers.count;
+          }
+          if (comments == null && typeof node.total_comment_count === "number") {
+            comments = node.total_comment_count;
+          }
+          if (views == null && typeof node.play_count === "number" && node.play_count > 0) {
+            views = node.play_count;
+          }
+
+          for (const k of Object.keys(node)) {
+            walk(node[k]);
+          }
+        };
+
+        walk(parsedJson);
+      }
+    }
+  } catch (_) {}
+
+  // Fallback to local yt-dlp if Facebook ever changes its HTML script payload
+  if (!videoUrl && fs.existsSync("/opt/homebrew/bin/yt-dlp")) {
+    try {
+      const { stdout } = await execFileAsync(
+        "/opt/homebrew/bin/yt-dlp",
+        ["-J", "--no-playlist", "--no-warnings", targetUrl],
+        { timeout: 25000, maxBuffer: 15 * 1024 * 1024 }
+      );
+      const info = JSON.parse(stdout);
+      const formats = Array.isArray(info.formats) ? info.formats : [];
+      const progressive = formats
+        .filter((f) => f.vcodec && f.vcodec !== "none" && f.acodec && f.acodec !== "none" && f.url)
+        .sort((a, b) => (b.height || 0) - (a.height || 0));
+      videoUrl = progressive[0]?.url || info.url || null;
+      const audioOnly = formats.find((f) => f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none") && f.url);
+      audioUrl = audioUrl || audioOnly?.url || videoUrl;
+      thumbnailUrl = thumbnailUrl || info.thumbnail || null;
+      username = username || info.uploader || info.channel || "";
+      caption = caption || info.description || info.title || "";
+      likes = likes ?? info.like_count ?? null;
+      comments = comments ?? info.comment_count ?? null;
+      views = views ?? info.view_count ?? null;
+      durationSec = durationSec ?? info.duration ?? null;
+      code = code || String(info.id || "");
+    } catch (_) {}
+  }
+
+  if (!videoUrl) {
+    return {
+      ok: false,
+      message: `Facebook did not return an MP4 stream for ${code || targetUrl}.`,
+    };
+  }
+
+  return {
+    ok: true,
+    platform: "facebook",
+    videoId: code,
+    shortcode: code,
+    url: code ? `https://www.facebook.com/reel/${code}/` : targetUrl,
+    videoUrl,
+    audioUrl: audioUrl || videoUrl,
+    thumbnailUrl,
+    username,
+    caption,
+    views,
+    likes,
+    comments,
+    videoDuration: durationSec,
+  };
 }
 
 // Local Whisper.cpp Transcription Engine (with full token offsets via -ojf)
@@ -1028,6 +1743,7 @@ function buildSkillRemakePrompt(pack) {
     `Le pack complet VideoBot est déjà extrait localement ici : ${pack.folderPath}`,
     `- Découpage plan par plan + texte exact dit sur chaque scène : ${path.join(pack.folderPath, "scenes.txt")}`,
     `- Script complet : ${path.join(pack.folderPath, "transcript.txt")}`,
+    `- Description originale du post (caption + CTA) : ${path.join(pack.folderPath, "caption.txt")}`,
     `- Planche contact : ${path.join(pack.folderPath, "storyboard.jpg")}`,
     `- Frames de chaque changement de plan : ${path.join(pack.folderPath, "frames")}`,
     `Commence par me proposer les 5 hooks visuels adaptés à mon personnage, puis demande-moi si je veux voir le storyboard avant d'animer.`,
@@ -1042,7 +1758,14 @@ async function reproduceVideoLocal(params = {}) {
   let platform = String(params.platform || parsed?.platform || "instagram").toLowerCase();
   let shortcode = String(params.shortcode || params.code || parsed?.shortcode || "").trim();
   let username = String(params.username || parsed?.username || "").replace(/^@/, "").trim();
-  let postUrl = params.url || parsed?.url || (shortcode ? `https://www.instagram.com/reel/${shortcode}/` : "");
+  let postUrl =
+    params.url ||
+    parsed?.url ||
+    (shortcode
+      ? platform === "facebook"
+        ? `https://www.facebook.com/reel/${shortcode}/`
+        : `https://www.instagram.com/reel/${shortcode}/`
+      : "");
   let videoUrl = params.videoUrl || null;
   let thumbnailUrl = params.thumbnailUrl || null;
   let caption = params.caption || "";
@@ -1050,6 +1773,7 @@ async function reproduceVideoLocal(params = {}) {
   let likes = params.likes ?? null;
   let comments = params.comments ?? null;
   let outlierScore = params.outlierScore ?? null;
+  let requestedCategory = params.category && params.category !== "auto" ? params.category : "";
 
   // Check if we already have videoUrl/metrics in Master Posts DB
   if (shortcode && postsDb[`${platform}:${shortcode}`]) {
@@ -1062,9 +1786,19 @@ async function reproduceVideoLocal(params = {}) {
     likes = likes ?? known.likes;
     comments = comments ?? known.comments;
     outlierScore = outlierScore ?? known.outlierScore;
+    if (!requestedCategory && known.category && known.category !== "Uncategorized") {
+      requestedCategory = known.category;
+    }
   }
 
-  const prefix = platform === "tiktok" ? "tt" : platform === "youtube" ? "yt" : "ig";
+  const prefix =
+    platform === "tiktok"
+      ? "tt"
+      : platform === "youtube"
+      ? "yt"
+      : platform === "facebook"
+      ? "fb"
+      : "ig";
   const safeCode = (shortcode || crypto.createHash("md5").update(postUrl || String(Date.now())).digest("hex").slice(0, 11))
     .replace(/[^a-zA-Z0-9_-]/g, "");
   const packId = `${prefix}_${safeCode}`;
@@ -1072,16 +1806,23 @@ async function reproduceVideoLocal(params = {}) {
   const framesDir = path.join(packFolder, "frames");
   const zipPath = path.join(REPRODUCE_DIR, `${packId}.zip`);
 
-  // Return cached pack immediately unless force=true
-  if (!params.force) {
-    const existing = reproduceDb.find((p) => p.packId === packId);
-    if (existing && fs.existsSync(zipPath) && fs.existsSync(path.join(packFolder, "scenes.txt"))) {
-      return { ok: true, cached: true, pack: existing };
-    }
-  }
-
-  // Resolve fresh videoUrl via Chrome extension if missing or expired
+  // Resolve fresh videoUrl and/or missing post description (`caption`) via Direct FB Resolver or Chrome extension
   const fetchFreshMediaInfo = async () => {
+    if (platform === "facebook") {
+      const fb = await resolveFacebookReelDirect(postUrl || safeCode);
+      if (fb?.ok) {
+        if (fb.videoUrl) videoUrl = fb.videoUrl;
+        thumbnailUrl = fb.thumbnailUrl || thumbnailUrl;
+        username = fb.username || username;
+        caption = fb.caption || caption;
+        views = views ?? fb.views ?? null;
+        likes = likes ?? fb.likes ?? null;
+        comments = comments ?? fb.comments ?? null;
+        if (fb.url) postUrl = fb.url;
+      }
+      return fb;
+    }
+
     const info = await runExtensionJob(
       {
         kind: "media_info",
@@ -1092,8 +1833,8 @@ async function reproduceVideoLocal(params = {}) {
       },
       55000
     );
-    if (info?.ok && info.videoUrl) {
-      videoUrl = info.videoUrl;
+    if (info?.ok) {
+      if (info.videoUrl) videoUrl = info.videoUrl;
       thumbnailUrl = info.thumbnailUrl || thumbnailUrl;
       username = info.username || username;
       caption = info.caption || caption;
@@ -1104,7 +1845,35 @@ async function reproduceVideoLocal(params = {}) {
     return info;
   };
 
-  if (!videoUrl) {
+  // Return cached pack immediately unless force=true (hydrate caption if missing on cached pack)
+  if (!params.force) {
+    const existing = reproduceDb.find((p) => p.packId === packId);
+    if (existing && fs.existsSync(zipPath) && fs.existsSync(path.join(packFolder, "scenes.txt"))) {
+      if (!existing.caption && isExtensionConnected()) {
+        try {
+          await fetchFreshMediaInfo();
+          if (caption) {
+            existing.caption = caption;
+            await propagatePostEnrichment(platform, safeCode, { caption, username });
+          }
+        } catch (_) {}
+      }
+      if (requestedCategory) {
+        await assignCategoryAndPropagate({
+          category: requestedCategory,
+          platform,
+          username: existing.username || username,
+          shortcode: safeCode,
+          applyToCreator: true,
+        });
+      }
+      existing.category = existing.category || inferCategory(existing);
+      return { ok: true, cached: true, pack: existing };
+    }
+  }
+
+  // Always fetch media_info when videoUrl OR caption is missing (Instagram Reels grid omits captions)
+  if (!videoUrl || !caption) {
     const info = await fetchFreshMediaInfo();
     if (!videoUrl) {
       return {
@@ -1122,6 +1891,7 @@ async function reproduceVideoLocal(params = {}) {
   const thumbPath = path.join(packFolder, "thumbnail.jpg");
   const storyboardPath = path.join(packFolder, "storyboard.jpg");
   const transcriptPath = path.join(packFolder, "transcript.txt");
+  const captionTxtPath = path.join(packFolder, "caption.txt");
   const scenesTxtPath = path.join(packFolder, "scenes.txt");
   const briefMdPath = path.join(packFolder, "REPRODUCE_BRIEF.md");
   const metaJsonPath = path.join(packFolder, "metadata.json");
@@ -1262,8 +2032,9 @@ async function reproduceVideoLocal(params = {}) {
     sc.spokenText = perSceneWords[idx] || "";
   });
 
-  // 6. Write exact VideoBot `transcript.txt` and `scenes.txt`
+  // 6. Write exact VideoBot `transcript.txt`, `caption.txt`, and `scenes.txt`
   await fsp.writeFile(transcriptPath, (fullTranscript || "(No spoken dialogue detected)") + "\n", "utf8");
+  await fsp.writeFile(captionTxtPath, (caption || "(No post caption)") + "\n", "utf8");
 
   const scenesTxtLines = [
     `Scene Breakdown — video ${packId}`,
@@ -1284,17 +2055,33 @@ async function reproduceVideoLocal(params = {}) {
     .filter(Boolean)
     .join(" · ");
 
+  const resolvedPackCategory = requestedCategory
+    ? ensureCategoryExists(requestedCategory)
+    : inferCategory({
+        platform,
+        code: safeCode,
+        username,
+        caption,
+        transcript: fullTranscript,
+        spokenHook,
+        onScreenHook,
+      });
+
   // 7. Write REPRODUCE_BRIEF.md & metadata.json inside pack
   const briefLines = [
     `# Reproduce Pack — ${packId}`,
     ``,
     `- **Creator**: ${username ? "@" + username : "Unknown"} (${platform})`,
+    `- **Category**: ${resolvedPackCategory}`,
     `- **Source URL**: ${postUrl}`,
     `- **Duration**: ${durationSec.toFixed(1)}s · **Scenes**: ${sceneRecords.length}`,
     ...(outlierScore != null ? [`- **Outlier Score**: ${outlierScore}x`] : []),
     ...(views != null ? [`- **Views**: ${views.toLocaleString()}`] : []),
     ...(onScreenHook ? [`- **On-Screen Hook (OCR)**: ${onScreenHook}`] : []),
     `- **Spoken Hook (0-5s)**: ${spokenHook || "—"}`,
+    ``,
+    `## Original Post Description (Caption)`,
+    caption || "(No post caption)",
     ``,
     `## Full Spoken Transcript`,
     fullTranscript || "(No spoken dialogue)",
@@ -1314,6 +2101,7 @@ async function reproduceVideoLocal(params = {}) {
     platform,
     shortcode: safeCode,
     username,
+    category: resolvedPackCategory,
     url: postUrl,
     caption,
     views,
@@ -1346,7 +2134,7 @@ async function reproduceVideoLocal(params = {}) {
     timeout: 60000,
   });
 
-  // 9. Persist in reproduce_db.json AND Master Posts DB
+  // 9. Persist in reproduce_db.json AND propagate caption + category across Master DB & scans
   const existingIdx = reproduceDb.findIndex((p) => p.packId === packId);
   if (existingIdx >= 0) reproduceDb.splice(existingIdx, 1);
   reproduceDb.unshift(packRecord);
@@ -1361,6 +2149,7 @@ async function reproduceVideoLocal(params = {}) {
         code: safeCode,
         shortcode: safeCode,
         username,
+        category: resolvedPackCategory,
         url: postUrl,
         caption,
         views,
@@ -1372,8 +2161,13 @@ async function reproduceVideoLocal(params = {}) {
         videoUrl: packRecord.videoAssetUrl,
       },
     ],
-    { platform, username, source: "reproduce_pack" }
+    { platform, username, category: resolvedPackCategory, source: "reproduce_pack" }
   );
+  await propagatePostEnrichment(platform, safeCode, {
+    caption,
+    username,
+    category: resolvedPackCategory,
+  });
 
   return { ok: true, cached: false, pack: packRecord };
 }
@@ -1502,6 +2296,16 @@ function formatPostSummary(row, index, fallbackPlatform = "instagram") {
     typeof row.outlierScore === "number" ? Number(row.outlierScore.toFixed(2)) : null;
   const outlierStr = outlierScore != null ? `${outlierScore.toFixed(2)}x` : "n/a";
   const pack = findPackForCode(code);
+  const dbHit = code ? postsDb[`${platform}:${code}`] : null;
+  const resolvedUsername = row.userName || row.username || dbHit?.username || pack?.username || "";
+  const resolvedCaption = String(row.caption || dbHit?.caption || pack?.caption || "").trim();
+  const resolvedCategory = inferCategory({
+    platform,
+    code,
+    username: resolvedUsername,
+    caption: resolvedCaption,
+    category: row.category || dbHit?.category || pack?.category,
+  });
 
   return {
     rank: index + 1,
@@ -1509,7 +2313,8 @@ function formatPostSummary(row, index, fallbackPlatform = "instagram") {
     shortcode: code,
     code,
     url,
-    username: row.userName || row.username || "",
+    username: resolvedUsername,
+    category: resolvedCategory,
     createDate: row.createDate || "",
     ageHours,
     outlierScore,
@@ -1524,10 +2329,10 @@ function formatPostSummary(row, index, fallbackPlatform = "instagram") {
     mediaType: row.mediaType === 2 ? "video/reel" : row.mediaType === 8 ? "carousel" : "image",
     carouselCount: row.carouselCount ?? null,
     videoDuration: row.videoDuration ?? null,
-    caption: String(row.caption || "").trim(),
-    videoUrl: row.videoUrl || null,
-    audioUrl: row.audioUrl || row.videoUrl || null,
-    thumbnailUrl: row.thumbnailUrl || row.thumbnailSmallUrl || null,
+    caption: resolvedCaption,
+    videoUrl: row.videoUrl || dbHit?.videoUrl || null,
+    audioUrl: row.audioUrl || row.videoUrl || dbHit?.audioUrl || null,
+    thumbnailUrl: row.thumbnailUrl || row.thumbnailSmallUrl || dbHit?.thumbnailUrl || null,
     hasCachedTranscript: !!(code && transcriptCache[code]),
     hasCachedVisualHook: !!(code && visualHooksCache[code]),
     isSaved: isCodeSaved(code),
@@ -1618,12 +2423,19 @@ async function runTranscription(params) {
 
 async function runVisualHook(params) {
   let videoUrl = params.videoUrl || null;
-  const shortcode = extractShortcode(params.shortcode || params.postUrlOrShortcode) || params.shortcode || null;
+  const parsed = parseVideoTarget(params.postUrlOrShortcode || params.shortcode || "", params.platform || "instagram");
+  const platform = String(params.platform || parsed?.platform || "instagram").toLowerCase();
+  const shortcode = extractShortcode(params.shortcode || params.postUrlOrShortcode) || parsed?.shortcode || params.shortcode || null;
 
   if (!videoUrl && shortcode) {
-    const info = await runExtensionJob({ kind: "media_info", shortcode }, 45000);
-    if (info?.ok && info.videoUrl) {
-      videoUrl = info.videoUrl;
+    if (platform === "facebook") {
+      const fb = await resolveFacebookReelDirect(params.postUrlOrShortcode || shortcode);
+      if (fb?.ok && fb.videoUrl) videoUrl = fb.videoUrl;
+    } else {
+      const info = await runExtensionJob({ kind: "media_info", platform, shortcode }, 45000);
+      if (info?.ok && info.videoUrl) {
+        videoUrl = info.videoUrl;
+      }
     }
   }
 
@@ -1648,6 +2460,136 @@ async function runReproducePack(params) {
     body: JSON.stringify(params),
   });
   return await res.json();
+}
+
+async function fetchAndPersistPostDetails(params = {}) {
+  const parsed = parseVideoTarget(
+    params.url || params.postUrlOrShortcode || params.shortcode || params.code || "",
+    params.platform || "instagram"
+  );
+  const platform = String(params.platform || parsed?.platform || "instagram").toLowerCase();
+  const shortcode = String(params.shortcode || params.code || parsed?.shortcode || "").trim();
+  if (!shortcode) {
+    return { ok: false, message: "Missing post shortcode or URL." };
+  }
+
+  const key = `${platform}:${shortcode}`;
+  const existing = postsDb[key];
+  const pack = findPackForCode(shortcode);
+
+  if (!params.force && existing?.caption && existing?.username) {
+    return { ok: true, cached: true, post: existing };
+  }
+
+  if (!params.force && pack?.caption) {
+    const synced = await propagatePostEnrichment(platform, shortcode, {
+      caption: pack.caption,
+      username: pack.username || existing?.username || params.username || "",
+    });
+    return { ok: true, cached: true, post: synced };
+  }
+
+  let info;
+  if (platform === "facebook") {
+    const fb = await resolveFacebookReelDirect(
+      params.url || existing?.url || parsed?.url || `https://www.facebook.com/reel/${shortcode}/`
+    );
+    info = fb?.ok
+      ? {
+          ok: true,
+          username: fb.username,
+          caption: fb.caption,
+          viewCount: fb.views,
+          likesCount: fb.likes,
+          commentsCount: fb.comments,
+          videoDuration: fb.videoDuration,
+          thumbnailUrl: fb.thumbnailUrl,
+          videoUrl: fb.videoUrl,
+          audioUrl: fb.audioUrl,
+        }
+      : { ok: false, error: { message: fb?.message || "Could not resolve Facebook Reel." } };
+  } else {
+    info = await runExtensionJob(
+      {
+        kind: "media_info",
+        platform,
+        shortcode,
+        username: params.username || existing?.username || parsed?.username || "",
+        url: params.url || existing?.url || parsed?.url || `https://www.instagram.com/reel/${shortcode}/`,
+      },
+      35000
+    );
+  }
+
+  if (!info?.ok) {
+    return {
+      ok: false,
+      message: info?.error?.message || "Could not retrieve post description from Instagram.",
+    };
+  }
+
+  const updated = await propagatePostEnrichment(platform, shortcode, {
+    username: info.username || existing?.username || params.username || "",
+    caption: info.caption ?? "",
+    views: info.viewCount ?? existing?.views ?? null,
+    likes: info.likesCount ?? existing?.likes ?? null,
+    comments: info.commentsCount ?? existing?.comments ?? null,
+    videoDuration: info.videoDuration ?? existing?.videoDuration ?? null,
+    createDate: info.createDate || existing?.createDate || "",
+    thumbnailUrl: info.thumbnailUrl || existing?.thumbnailUrl || null,
+    videoUrl: info.videoUrl || existing?.videoUrl || null,
+    audioUrl: info.audioUrl || info.videoUrl || existing?.audioUrl || null,
+  });
+
+  // Mark captionChecked even when a creator genuinely published an empty caption
+  if (updated && !updated.caption) {
+    updated.captionChecked = true;
+    if (isPrimaryHub) await saveJson(POSTS_DB_FILE, postsDb);
+  }
+
+  return { ok: true, cached: false, post: updated };
+}
+
+let captionHydrationRunning = false;
+async function hydrateMissingCaptionsBatch({ shortcodes = [], username = "", platform = "instagram", limit = 15 } = {}) {
+  if (captionHydrationRunning || !isExtensionConnected()) {
+    return { ok: true, hydrated: 0, busy: captionHydrationRunning };
+  }
+  captionHydrationRunning = true;
+  let hydrated = 0;
+  try {
+    const plat = String(platform || "instagram").toLowerCase();
+    const cleanUser = String(username || "").replace(/^@/, "").trim().toLowerCase();
+
+    let targets = [];
+    if (Array.isArray(shortcodes) && shortcodes.length) {
+      targets = shortcodes.map((c) => String(c || "").trim()).filter(Boolean);
+    } else {
+      let candidates = Object.values(postsDb).filter(
+        (p) => p.platform === plat && !p.caption && !p.captionChecked
+      );
+      if (cleanUser) {
+        candidates = candidates.filter((p) => (p.username || "").toLowerCase() === cleanUser);
+      }
+      candidates.sort((a, b) => ((b.outlierScore ?? b.views) || 0) - ((a.outlierScore ?? a.views) || 0));
+      targets = candidates.slice(0, Math.max(1, Math.min(40, Number(limit) || 15))).map((p) => p.code);
+    }
+
+    targets = targets.slice(0, Math.max(1, Math.min(40, Number(limit) || 15)));
+    for (const code of targets) {
+      if (!isExtensionConnected()) break;
+      const key = `${plat}:${code}`;
+      if (postsDb[key]?.caption) continue;
+      try {
+        const res = await fetchAndPersistPostDetails({ shortcode: code, platform: plat });
+        if (res?.ok) hydrated += 1;
+      } catch (_) {}
+      await new Promise((r) => setTimeout(r, 260));
+    }
+  } finally {
+    captionHydrationRunning = false;
+  }
+  return { ok: true, hydrated };
 }
 
 async function runMineComments({ postUrlOrShortcode, shortcode: rawCode, limit = 60, force = false }) {
@@ -1689,6 +2631,7 @@ async function runNicheRadar({
   perAccountDepth = 36,
   sortBy = "outlier",
   concurrency = 3,
+  category = "auto",
 }) {
   let targetSpecs = parseCreatorList(
     Array.isArray(usernames) && usernames.length ? usernames : urlsOrHandles,
@@ -1807,6 +2750,11 @@ async function runNicheRadar({
           const item = formatPostSummary(r, rIdx, plat);
           item.username = item.username || handle;
           item.creatorBaseline = baseline;
+          if (category && category !== "auto") {
+            item.category = ensureCategoryExists(category);
+          } else {
+            item.category = inferCategory({ ...item, platform: plat, username: handle });
+          }
           if (baseline && baseline > 0 && item.viewsPerHour != null && item.velocityScore == null) {
             item.velocityScore = Number(((item.viewsPerHour * 24) / baseline).toFixed(2));
           }
@@ -1817,6 +2765,7 @@ async function runNicheRadar({
         const savedNow = await upsertPostsToDb(formatted, {
           platform: plat,
           username: handle,
+          category,
           creatorBaseline: baseline,
           source: "niche_radar",
         });
@@ -1884,6 +2833,14 @@ async function runNicheRadar({
       radarHistory.unshift(radarRun);
       if (radarHistory.length > 20) radarHistory.length = 20;
       await saveJson(RADAR_HISTORY_FILE, radarHistory);
+      const topMissing = mergedPosts
+        .filter((p) => p.platform === "instagram" && !p.caption)
+        .slice(0, 12)
+        .map((p) => p.shortcode || p.code)
+        .filter(Boolean);
+      if (topMissing.length) {
+        hydrateMissingCaptionsBatch({ shortcodes: topMissing, platform: "instagram", limit: 12 }).catch(() => {});
+      }
     }
 
     return { ok: true, ...radarRun };
@@ -2025,9 +2982,29 @@ async function startLocalHub() {
       return sendJson(res, 404, { ok: false, error: "ASSET_NOT_FOUND" });
     }
 
-    // List Reproduce Packs
+    // List Reproduce Packs (with optional category filter)
     if (req.method === "GET" && pathname === "/api/reproduce/list") {
-      return sendJson(res, 200, { ok: true, count: reproduceDb.length, packs: reproduceDb });
+      const catFilter = (urlObj.searchParams.get("category") || "all").trim();
+      let packs = reproduceDb.map((p) => ({
+        ...p,
+        category: p.category || inferCategory(p),
+      }));
+      if (catFilter && catFilter.toLowerCase() !== "all") {
+        const normCat = normalizeCategoryName(catFilter);
+        packs = packs.filter((p) => (p.category || "Uncategorized").toLowerCase() === normCat.toLowerCase());
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        count: packs.length,
+        totalCount: reproduceDb.length,
+        ...getCategoriesSummary(),
+        packs,
+      });
+    }
+
+    // Categories Summary
+    if (req.method === "GET" && pathname === "/api/categories") {
+      return sendJson(res, 200, { ok: true, ...getCategoriesSummary() });
     }
 
     // Delete a Reproduce Pack
@@ -2047,6 +3024,7 @@ async function startLocalHub() {
         search: urlObj.searchParams.get("search") || "",
         username: urlObj.searchParams.get("username") || "",
         platform: urlObj.searchParams.get("platform") || "all",
+        category: urlObj.searchParams.get("category") || "all",
         minOutlier: Number(urlObj.searchParams.get("minOutlier") || 0),
         savedOnly: urlObj.searchParams.get("savedOnly") === "1",
         reproducedOnly: urlObj.searchParams.get("reproducedOnly") === "1",
@@ -2054,6 +3032,13 @@ async function startLocalHub() {
         limit: Number(urlObj.searchParams.get("limit") || 300),
       });
       return sendJson(res, 200, { ok: true, ...result });
+    }
+
+    // Resolve Facebook Comet Reel MP4 + Audio + Metadata directly on Hub
+    if (req.method === "GET" && pathname === "/api/fb-resolve") {
+      const target = urlObj.searchParams.get("url") || urlObj.searchParams.get("videoId") || "";
+      const out = await resolveFacebookReelDirect(target);
+      return sendJson(res, 200, out);
     }
 
     // Media Proxy for CORS/CORP-free Thumbnails, Inline Video Player & 1-Click MP4 Downloads
@@ -2065,11 +3050,16 @@ async function startLocalHub() {
         return sendJson(res, 400, { ok: false, error: "INVALID_URL" });
       }
       try {
+        const referer = targetUrl.includes("tiktok")
+          ? "https://www.tiktok.com/"
+          : targetUrl.includes("facebook")
+          ? "https://www.facebook.com/"
+          : "https://www.instagram.com/";
         const headers = {
           "User-Agent":
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
           Accept: "*/*",
-          Referer: targetUrl.includes("tiktok") ? "https://www.tiktok.com/" : "https://www.instagram.com/",
+          Referer: referer,
         };
         if (req.headers.range) headers.Range = req.headers.range;
         const upstream = await fetch(targetUrl, { headers });
@@ -2111,17 +3101,38 @@ async function startLocalHub() {
 
     // 1b. Workspace Library, Reproduce DB & Master DB Summary for Studio Dashboard
     if (req.method === "GET" && pathname === "/api/library") {
-      const enrichedSaved = savedLibrary.posts.map((p) => ({
-        ...p,
-        isSaved: true,
-        reproducePackId: findPackForCode(p.code)?.packId || null,
-        reproduceZipUrl: findPackForCode(p.code)?.zipUrl || null,
+      const enrichedSaved = savedLibrary.posts.map((p) => {
+        const dbHit = postsDb[`${p.platform || "instagram"}:${p.code}`];
+        const pack = findPackForCode(p.code);
+        return {
+          ...p,
+          username: p.username || dbHit?.username || pack?.username || "",
+          caption: p.caption || dbHit?.caption || pack?.caption || "",
+          category: p.category && p.category !== "Uncategorized" ? p.category : dbHit?.category || inferCategory(p),
+          thumbnailUrl: p.thumbnailUrl || dbHit?.thumbnailUrl || (pack ? `/api/reproduce/asset/${pack.packId}/thumbnail.jpg` : null),
+          videoUrl: p.videoUrl || dbHit?.videoUrl || null,
+          views: p.views ?? dbHit?.views ?? null,
+          likes: p.likes ?? dbHit?.likes ?? null,
+          comments: p.comments ?? dbHit?.comments ?? null,
+          isSaved: true,
+          reproducePackId: pack?.packId || null,
+          reproduceZipUrl: pack?.zipUrl || null,
+        };
+      });
+      const enrichedPacks = reproduceDb.map((pk) => ({
+        ...pk,
+        category: pk.category || inferCategory(pk),
       }));
+      const catSummary = getCategoriesSummary();
       return sendJson(res, 200, {
         ok: true,
         savedPosts: enrichedSaved,
-        reproducePacks: reproduceDb,
+        reproducePacks: enrichedPacks,
         postsDbCount: Object.keys(postsDb).length,
+        categories: catSummary.categories,
+        creatorMap: catSummary.creatorMap,
+        dbCategoryCounts: catSummary.dbCounts,
+        videoDbCategoryCounts: catSummary.videoDbCounts,
         transcripts: transcriptCache,
         visualHooks: visualHooksCache,
         comments: commentsCache,
@@ -2244,7 +3255,7 @@ async function startLocalHub() {
       if (!normalized) {
         return sendJson(res, 200, { ok: false, error: "BAD_POST", message: "Missing post code" });
       }
-      // Enrich from Master DB if extension save lacked outlierScore or videoUrl
+      // Enrich from Master DB if extension save lacked outlierScore, caption, or videoUrl
       const dbHit = postsDb[`${normalized.platform}:${normalized.code}`];
       if (dbHit) {
         normalized.outlierScore = normalized.outlierScore ?? dbHit.outlierScore ?? null;
@@ -2253,6 +3264,8 @@ async function startLocalHub() {
         normalized.videoUrl = normalized.videoUrl || dbHit.videoUrl || null;
         normalized.thumbnailUrl = normalized.thumbnailUrl || dbHit.thumbnailUrl || null;
         normalized.username = normalized.username || dbHit.username || "";
+        normalized.caption = normalized.caption || dbHit.caption || "";
+        normalized.category = dbHit.category || normalized.category;
       }
 
       savedLibrary.posts = savedLibrary.posts.filter(
@@ -2266,6 +3279,16 @@ async function startLocalHub() {
         source: "saved_vault",
       });
 
+      // Auto-hydrate caption & creator handle in background if missing on newly saved post
+      if ((!normalized.caption || !normalized.username) && normalized.platform === "instagram" && isExtensionConnected()) {
+        fetchAndPersistPostDetails({
+          shortcode: normalized.code,
+          platform: normalized.platform,
+          username: normalized.username,
+          url: normalized.url,
+        }).catch(() => {});
+      }
+
       return sendJson(res, 200, {
         ok: true,
         saved: true,
@@ -2273,6 +3296,45 @@ async function startLocalHub() {
         count: savedLibrary.posts.length,
         limit: null,
       });
+    }
+
+    // 4b. Categories Management & Post Description Retrieval Endpoints
+    if (req.method === "POST" && pathname === "/api/categories/add") {
+      const clean = ensureCategoryExists(body.name || body.category || "");
+      if (!clean || clean === "all" || clean === "auto") {
+        return sendJson(res, 200, { ok: false, message: "Enter a valid category name." });
+      }
+      await saveJson(CATEGORIES_FILE, categoriesStore);
+      return sendJson(res, 200, { ok: true, category: clean, ...getCategoriesSummary() });
+    }
+
+    if (req.method === "POST" && pathname === "/api/categories/assign") {
+      const out = await assignCategoryAndPropagate({
+        category: body.category,
+        platform: body.platform || "instagram",
+        username: body.username || "",
+        shortcode: body.shortcode || body.code || "",
+        applyToCreator: body.applyToCreator !== false,
+      });
+      return sendJson(res, 200, out);
+    }
+
+    if (req.method === "POST" && pathname === "/api/post-details") {
+      try {
+        const out = await fetchAndPersistPostDetails(body);
+        return sendJson(res, 200, out);
+      } catch (err) {
+        return sendJson(res, 200, { ok: false, message: err?.message || String(err) });
+      }
+    }
+
+    if (req.method === "POST" && pathname === "/api/hydrate-captions") {
+      try {
+        const out = await hydrateMissingCaptionsBatch(body);
+        return sendJson(res, 200, out);
+      } catch (err) {
+        return sendJson(res, 200, { ok: false, message: err?.message || String(err) });
+      }
     }
 
     // 5. Ingest Posts to Permanent Master Database (from Chrome In-Page Sorts or Studio)
@@ -2353,12 +3415,14 @@ async function startLocalHub() {
           });
         }
 
+        const requestedCategory = body.category && body.category !== "auto" ? ensureCategoryExists(body.category) : "";
         const rows = Array.isArray(rawRes.rows) ? rawRes.rows : [];
         const baseline = rawRes.outlier?.baseline ?? null;
         const posts = rows.map((r, i) => {
           const formatted = formatPostSummary(r, i, platform);
           formatted.username = formatted.username || cleanUser;
           formatted.creatorBaseline = baseline;
+          formatted.category = requestedCategory || inferCategory({ ...formatted, platform, username: cleanUser });
           if (baseline && baseline > 0 && formatted.viewsPerHour != null && formatted.velocityScore == null) {
             formatted.velocityScore = Number(((formatted.viewsPerHour * 24) / baseline).toFixed(2));
           }
@@ -2369,14 +3433,18 @@ async function startLocalHub() {
         await upsertPostsToDb(posts, {
           platform,
           username: cleanUser,
+          category: requestedCategory || "auto",
           creatorBaseline: baseline,
           source: "creator_spy",
         });
+
+        const resolvedScanCategory = requestedCategory || inferCategory({ platform, username: cleanUser });
 
         const payload = {
           ok: true,
           platform,
           username: cleanUser,
+          category: resolvedScanCategory,
           surface: rawRes.surface || surface,
           sortBy,
           totalScanned: rawRes.seenInFeed || rows.length,
@@ -2387,6 +3455,19 @@ async function startLocalHub() {
         };
 
         await recordScanInHistory(payload);
+
+        // Background-hydrate missing post descriptions for the top 12 outliers right away
+        if (platform === "instagram") {
+          const topMissingCodes = posts
+            .filter((p) => !p.caption)
+            .slice(0, 12)
+            .map((p) => p.shortcode || p.code)
+            .filter(Boolean);
+          if (topMissingCodes.length) {
+            hydrateMissingCaptionsBatch({ shortcodes: topMissingCodes, platform: "instagram", limit: 12 }).catch(() => {});
+          }
+        }
+
         return sendJson(res, 200, payload);
       } catch (err) {
         return sendJson(res, 200, { ok: false, message: err?.message || String(err) });
@@ -2491,6 +3572,17 @@ async function startLocalHub() {
         presenceMaxIdleMin: 0,
       })
     );
+
+    // Gently backfill any saved post missing its description or creator handle once Chrome connects
+    setTimeout(() => {
+      const missingSaved = savedLibrary.posts
+        .filter((p) => p.platform === "instagram" && (!p.caption || !p.username))
+        .map((p) => p.code)
+        .filter(Boolean);
+      if (missingSaved.length) {
+        hydrateMissingCaptionsBatch({ shortcodes: missingSaved, platform: "instagram", limit: 10 }).catch(() => {});
+      }
+    }, 2500);
 
     ws.on("message", (data) => {
       extState.lastSeenAt = new Date().toISOString();

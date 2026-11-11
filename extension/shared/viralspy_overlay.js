@@ -3,9 +3,10 @@
   window.__viralSpyOverlayLoaded = true;
 
   const IS_TIKTOK = /tiktok\.com$/i.test(location.hostname);
-  const PLATFORM = IS_TIKTOK ? "tiktok" : "instagram";
+  const IS_FACEBOOK = /facebook\.com$/i.test(location.hostname);
+  const PLATFORM = IS_TIKTOK ? "tiktok" : IS_FACEBOOK ? "facebook" : "instagram";
 
-  // Ensure local pro user ID is always present so .sf-save-btn never asks to sign in
+  // Ensure local pro user ID is always present so .sf-save-btn & local transcribe never ask to sign in
   try {
     chrome.storage.local.get(["sort_feed_user_id", "sortFeedUser"], (got) => {
       if (!got?.sort_feed_user_id) {
@@ -105,7 +106,7 @@
     }
   }
 
-  // ── Extract Post Info around any Save Button ──────────────────────────────
+  // ── Extract Post Info around Save Buttons & Facebook Stacks ───────────────
   function parseIgCodeFromHref(href) {
     const m = String(href || "").match(/\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i);
     return m ? m[1] : null;
@@ -114,6 +115,83 @@
   function parseTkInfoFromHref(href) {
     const m = String(href || "").match(/\/@([^/?#]+)\/(video|photo)\/(\d+)/i);
     return m ? { username: m[1], kind: m[2], code: m[3] } : null;
+  }
+
+  function parseFbCodeFromHref(href) {
+    const m = String(href || "").match(/(?:\/reel\/|\/videos\/)(\d+)/i);
+    return m ? m[1] : null;
+  }
+
+  function extractFbCreatorName(stageEl) {
+    if (stageEl) {
+      const ownerLinks = stageEl.querySelectorAll('a[aria-label="See Owner Profile"]');
+      for (const a of ownerLinks) {
+        const txt = (a.textContent || "").trim();
+        if (txt) return txt;
+      }
+      for (const sp of stageEl.querySelectorAll("span")) {
+        const txt = (sp.textContent || "").trim();
+        if (/ · /.test(txt) && /audio/i.test(txt)) return txt.split("·")[0].trim();
+      }
+    }
+    const reserved = new Set(["notifications", "facebook", "menu", "home", "reels", "watch", "marketplace", "search", "groups", "friends", "video"]);
+    for (const h1 of document.querySelectorAll("h1")) {
+      const txt = (h1.textContent || "").replace(/\bVerified account\b/gi, "").replace(/\s+/g, " ").trim();
+      if (txt && txt.length <= 60 && !reserved.has(txt.toLowerCase())) return txt;
+    }
+    return "";
+  }
+
+  function resolveContextFromFbStack(stackEl) {
+    // 1. Sorted Facebook tile (.sf-fb-tile-actions inside [data-sf-sorted-item="true"])
+    const sortedTile = stackEl.closest('[data-sf-sorted-item="true"]');
+    if (sortedTile?.dataset?.sfItemJson) {
+      try {
+        const item = JSON.parse(sortedTile.dataset.sfItemJson);
+        const code = String(item?.VideoID || item?.code || item?.id || "").trim();
+        if (code) {
+          return {
+            platform: "facebook",
+            shortcode: code,
+            username: item?.Profile || item?.userName || "",
+            url: `https://www.facebook.com/reel/${code}/`,
+            thumbnailUrl: item?.Thumb || item?.thumbnailUrl || null,
+            caption: item?.Caption || item?.caption || "",
+            views: item?.Views ?? item?.viewCount ?? null,
+            likes: item?.Likes ?? item?.likesCount ?? null,
+            comments: item?.Comments ?? item?.commentsCount ?? null,
+            outlierScore: item?.OutlierScore ?? item?.outlierScore ?? null,
+          };
+        }
+      } catch (_) {}
+    }
+
+    // 2. Unsorted profile Reels hover (.sf-fb-hover-cluster inside a[href*="/reel/"])
+    const linkEl = stackEl.closest('a[href*="/reel/"], a[href*="/videos/"]');
+    if (linkEl) {
+      const code = parseFbCodeFromHref(linkEl.getAttribute("href"));
+      if (code) {
+        return {
+          platform: "facebook",
+          shortcode: code,
+          username: extractFbCreatorName(null),
+          url: `https://www.facebook.com/reel/${code}/`,
+        };
+      }
+    }
+
+    // 3. Single Facebook Reel page (/reel/<id>) with .sf-fb-reel-pill
+    const stageEl = stackEl._sfStage || stackEl.closest("[data-video-id]");
+    const pathCode = parseFbCodeFromHref(location.pathname);
+    const stageCode = stageEl?.getAttribute?.("data-video-id") || null;
+    // Prefer canonical Reel ID from location.pathname (/reel/<id>) over internal xpv_asset_id
+    const code = pathCode || stageCode;
+    return {
+      platform: "facebook",
+      shortcode: code,
+      username: extractFbCreatorName(stageEl),
+      url: code ? `https://www.facebook.com/reel/${code}/` : location.href,
+    };
   }
 
   function resolveContextFromSaveBtn(saveBtn) {
@@ -215,8 +293,8 @@
     setTimeout(() => a.remove(), 1200);
   }
 
-  // ── Create & Mount One-Shot Reproduce Button Right Above Save ─────────────
-  function buildReproduceButton(saveBtn, isSinglePostTheme) {
+  // ── Create & Mount One-Shot Reproduce Button ──────────────────────────────
+  function createReproduceBtnElement(getContextFn, isSinglePostTheme) {
     const btn = document.createElement("div");
     btn.className = "vs-reproduce-btn" + (isSinglePostTheme ? " vs-reproduce-sp" : "");
     btn.dataset.sfAction = "true";
@@ -239,8 +317,8 @@
       ev.stopPropagation();
       if (btn.classList.contains("is-loading")) return;
 
-      const ctx = resolveContextFromSaveBtn(saveBtn);
-      if (!ctx.shortcode && !ctx.url) {
+      const ctx = getContextFn();
+      if (!ctx?.shortcode && !ctx?.url) {
         showPackToast({ error: true, text: "Could not detect video code on this tile.", autoHideMs: 3500 });
         return;
       }
@@ -309,7 +387,7 @@
     saveBtn.dataset.vsReproduceAttached = "1";
 
     const isSp = saveBtn.classList.contains("sf-save-sp");
-    const repBtn = buildReproduceButton(saveBtn, isSp);
+    const repBtn = createReproduceBtnElement(() => resolveContextFromSaveBtn(saveBtn), isSp);
 
     // Special case: sorted TikTok tiles position each button wrapper absolutely via style.bottom (10, 34, 58)
     const inlineBottom = parent.style?.bottom || "";
@@ -341,8 +419,21 @@
     parent.insertBefore(repBtn, saveBtn);
   }
 
+  function attachReproduceOnFacebookStack(stackEl) {
+    if (!stackEl || stackEl.dataset.vsReproduceAttached === "1") return;
+    stackEl.dataset.vsReproduceAttached = "1";
+    const isReelPill = stackEl.classList.contains("sf-fb-reel-pill");
+    const repBtn = createReproduceBtnElement(() => resolveContextFromFbStack(stackEl), isReelPill);
+    stackEl.insertBefore(repBtn, stackEl.firstChild);
+  }
+
   function scanAndAttachAll() {
     document.querySelectorAll(".sf-save-btn").forEach(attachReproduceAboveSave);
+    if (IS_FACEBOOK) {
+      document
+        .querySelectorAll(".sf-fb-reel-pill, .sf-fb-hover-cluster, .sf-fb-tile-actions")
+        .forEach(attachReproduceOnFacebookStack);
+    }
   }
 
   // ── Two-Way Save Sync on Focus / Visibility ───────────────────────────────
@@ -402,7 +493,7 @@
       document.querySelectorAll('[data-sf-sorted-item="true"][data-sf-item-json]').forEach((el) => {
         try {
           const item = JSON.parse(el.dataset.sfItemJson);
-          const code = item?.code || item?.shortcode;
+          const code = item?.code || item?.shortcode || item?.VideoID;
           if (!code || ingestedCodes.has(code)) return;
           ingestedCodes.add(code);
           batch.push(item);
@@ -422,23 +513,27 @@
   }
 
   // ── DOM Observer ──────────────────────────────────────────────────────────
+  const ACTION_SELECTOR = IS_FACEBOOK
+    ? ".sf-save-btn, .sf-fb-reel-pill, .sf-fb-hover-cluster, .sf-fb-tile-actions"
+    : ".sf-save-btn";
+
   function bootObserver() {
     scanAndAttachAll();
     const obs = new MutationObserver((mutations) => {
-      let sawSave = false;
+      let sawAction = false;
       let sawSorted = false;
       for (const m of mutations) {
         for (const n of m.addedNodes) {
           if (n.nodeType !== 1) continue;
-          if (n.classList?.contains("sf-save-btn") || n.querySelector?.(".sf-save-btn")) {
-            sawSave = true;
+          if (n.matches?.(ACTION_SELECTOR) || n.querySelector?.(ACTION_SELECTOR)) {
+            sawAction = true;
           }
           if (n.dataset?.sfSortedItem === "true" || n.querySelector?.('[data-sf-sorted-item="true"]')) {
             sawSorted = true;
           }
         }
       }
-      if (sawSave) scanAndAttachAll();
+      if (sawAction) scanAndAttachAll();
       if (sawSorted) scheduleSortedPostsIngest();
     });
     obs.observe(document.documentElement || document.body, { childList: true, subtree: true });

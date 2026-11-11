@@ -104,7 +104,13 @@
   };
   const enrichMediaRow = (m, row) => {
     if (!row) return row;
-    if (!row.caption && m?.caption?.text) row.caption = m.caption.text;
+    if (!row.caption) {
+      const capText =
+        m?.caption?.text ||
+        m?.edge_media_to_caption?.edges?.[0]?.node?.text ||
+        "";
+      if (capText) row.caption = capText;
+    }
     row.videoUrl = bestVideo(m);
     row.audioUrl = bestAudio(m);
     row.mediaId = m?.pk != null ? String(m.pk) : (row.reelID != null ? String(row.reelID) : (row.postID != null ? String(row.postID) : null));

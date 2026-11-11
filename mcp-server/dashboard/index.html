@@ -165,6 +165,10 @@
               <option value="all" selected>All Posts</option>
             </select>
 
+            <select id="spyCategorySelect" class="apple-select" aria-label="Thematic category" title="Assign thematic category to this creator">
+              <option value="">Auto Niche</option>
+            </select>
+
             <button id="spySubmitBtn" type="submit" class="btn-primary">
               <span>Analyze Feed</span>
             </button>
@@ -183,6 +187,7 @@
             </div>
 
             <div class="quick-filter-wrap">
+              <button id="spyHydrateCaptionsBtn" type="button" class="btn-secondary btn-sm" title="Fetch missing Instagram post descriptions for top outliers">Fetch Top Captions</button>
               <input id="spyFilterInput" type="search" class="filter-search-input" placeholder="Filter captions…" />
             </div>
           </div>
@@ -296,6 +301,9 @@
             </div>
 
             <div class="radar-launch-wrap">
+              <select id="radarCategorySelect" class="apple-select" aria-label="Thematic category" title="Assign thematic category to scraped creators">
+                <option value="">Auto Niche</option>
+              </select>
               <select id="radarDepthSelect" class="apple-select">
                 <option value="24">24 posts / account</option>
                 <option value="36">36 posts / account</option>
@@ -321,13 +329,18 @@
         <header class="view-header">
           <div>
             <h1 class="view-title">Video Database</h1>
-            <p class="view-subtitle">One-shot VideoBot engine: shot-cut frames (`scene_01.jpg…`), word-aligned `scenes.txt`, Whisper `transcript.txt`, `storyboard.jpg`, `.zip`, and 1-click Skill Remake.</p>
+            <p class="view-subtitle">One-shot VideoBot engine: shot-cut frames (`scene_01.jpg…`), word-aligned `scenes.txt`, `caption.txt`, Whisper `transcript.txt`, `storyboard.jpg`, `.zip`, and 1-click Skill Remake.</p>
           </div>
         </header>
 
+        <div id="videoDbCategoryBar" class="category-pills-bar" aria-label="Filter Video Database by category"></div>
+
         <form id="reproduceForm" class="control-card">
           <div class="control-top-row">
-            <input id="reproduceUrlInput" type="text" class="apple-input-wide" placeholder="Paste any Instagram Reel or TikTok Video link (e.g. https://www.instagram.com/reel/DbhFF5aui3u/)" required />
+            <input id="reproduceUrlInput" type="text" class="apple-input-wide" placeholder="Paste any Instagram, Facebook, or TikTok Reel link (e.g. https://www.facebook.com/reel/1629751615320066)" required />
+            <select id="reproduceCategorySelect" class="apple-select" aria-label="Thematic category">
+              <option value="">Auto Niche</option>
+            </select>
             <button id="reproduceSubmitBtn" type="submit" class="btn-primary">
               <span>One-Shot Reproduce (.zip)</span>
             </button>
@@ -342,8 +355,8 @@
               <polygon points="10,12 10,17 15,14.5" fill="currentColor" stroke="none"></polygon>
             </svg>
           </div>
-          <h2>No Reproduce Packs yet</h2>
-          <p>Paste a Reel link above, click <strong>Reproduce</strong> on any card in Studio, or click the clapperboard icon right above Save directly on Instagram &amp; TikTok.</p>
+          <h2 id="videoDbEmptyTitle">No Reproduce Packs yet</h2>
+          <p id="videoDbEmptyDesc">Paste a Reel link above, click <strong>Reproduce</strong> on any card in Studio, or click the clapperboard icon right above Save directly on Instagram &amp; TikTok.</p>
         </div>
 
         <div id="videoDbList" class="reproduce-packs-stack"></div>
@@ -354,13 +367,16 @@
         <header class="view-header">
           <div>
             <h1 class="view-title">Master Database</h1>
-            <p class="view-subtitle">Every post ever scraped across Creator Spy, Niche Radar, and Chrome sorts — permanently saved on disk so you never lose data.</p>
+            <p class="view-subtitle">Every post ever scraped across Creator Spy, Niche Radar, and Chrome sorts — permanently saved on disk and organized by thematic niche.</p>
           </div>
           <div class="header-actions">
+            <button id="dbHydrateCaptionsBtn" type="button" class="btn-secondary" title="Fetch missing Instagram post descriptions for top outliers in current filter">Fetch Top Captions</button>
             <button id="dbExportCsvBtn" type="button" class="btn-secondary">Export Filtered CSV</button>
             <button id="dbExportJsonBtn" type="button" class="btn-secondary">Export Filtered JSON</button>
           </div>
         </header>
+
+        <div id="masterDbCategoryBar" class="category-pills-bar" aria-label="Filter Master Database by category"></div>
 
         <div class="control-card">
           <div class="control-top-row">
@@ -371,6 +387,7 @@
             <select id="dbPlatformSelect" class="apple-select">
               <option value="all">All Platforms</option>
               <option value="instagram">Instagram</option>
+              <option value="facebook">Facebook</option>
               <option value="tiktok">TikTok</option>
               <option value="youtube">YouTube</option>
             </select>
@@ -489,6 +506,7 @@
     <div class="drawer-header">
       <div class="drawer-title-group">
         <span id="drawerCreator" class="drawer-creator">@creator</span>
+        <select id="drawerCategorySelect" class="category-select-pill" aria-label="Post category" title="Assign thematic category"></select>
         <div id="drawerBadges" class="drawer-badges"></div>
       </div>
       <div class="drawer-header-actions">
@@ -522,7 +540,13 @@
             </div>
           </div>
           <div class="drawer-caption-box">
-            <span class="section-eyebrow">Caption</span>
+            <div class="drawer-caption-head">
+              <span class="section-eyebrow">Post Description (Caption)</span>
+              <div class="drawer-caption-actions">
+                <button id="refreshCaptionBtn" type="button" class="btn-ghost-xs" title="Fetch fresh post description from Instagram">Fetch</button>
+                <button id="copyCaptionBtn" type="button" class="btn-ghost-xs" title="Copy post description">Copy</button>
+              </div>
+            </div>
             <p id="drawerCaption" class="drawer-caption-text"></p>
           </div>
         </div>

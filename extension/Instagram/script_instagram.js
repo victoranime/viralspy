@@ -630,6 +630,12 @@ function createMetadataJsonReels(jsonResponse) {
   // Post ID
   metadataPerPost.code = jsonResponse?.code || "";
 
+  // Caption (when present on Clips or hydrated media nodes)
+  metadataPerPost.caption =
+    jsonResponse?.caption?.text ||
+    jsonResponse?.edge_media_to_caption?.edges?.[0]?.node?.text ||
+    "";
+
   // Comments count
   metadataPerPost.commentsCount = jsonResponse?.comment_count ?? null;
 

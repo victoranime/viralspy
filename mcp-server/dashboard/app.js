@@ -9,8 +9,14 @@ const state = {
   radarRun: null,
   radarSelectedHandles: new Set(),
   dbSort: "outlier",
+  dbCategory: "all",
   dbPosts: [],
   dbCreators: [],
+  videoDbCategory: "all",
+  categories: ["Health", "Pets", "Fitness", "Beauty", "Finance", "Tech & AI", "Lifestyle"],
+  creatorCategoryMap: {},
+  dbCategoryCounts: {},
+  videoDbCategoryCounts: {},
   expandedPacks: new Set(),
   vaultTab: "saved",
   library: {
@@ -258,6 +264,16 @@ async function loadLibrary() {
     state.library.recentScans = data.recentScans || [];
     state.library.radarRuns = data.radarRuns || [];
 
+    if (Array.isArray(data.categories) && data.categories.length) {
+      state.categories = data.categories;
+    }
+    if (data.creatorMap) state.creatorCategoryMap = data.creatorMap;
+    if (data.dbCategoryCounts) state.dbCategoryCounts = data.dbCategoryCounts;
+    if (data.videoDbCategoryCounts) state.videoDbCategoryCounts = data.videoDbCategoryCounts;
+
+    populateCategorySelects();
+    renderVideoDbCategoryBar();
+    renderMasterDbCategoryBar();
     updateSidebarCounts();
     renderRecentScans();
 
@@ -265,6 +281,10 @@ async function loadLibrary() {
       state.currentScan = state.library.recentScans[0];
       renderSpyResults();
     } else if (state.currentScan) {
+      const freshScan = state.library.recentScans.find(
+        (s) => s.username === state.currentScan.username && (s.platform || "instagram") === (state.currentScan.platform || "instagram")
+      );
+      if (freshScan) state.currentScan = freshScan;
       renderSpyResults();
     }
 
@@ -282,6 +302,355 @@ async function loadLibrary() {
       renderVideoDb();
     }
   } catch (_) {}
+}
+
+// ── Thematic Categories & Live Post Description Hydration ───────────────────
+
+function getEffectiveCategories() {
+  const ordered = ["Health", "Pets"];
+  const add = (c) => {
+    const t = String(c || "").trim();
+    if (!t || t === "Uncategorized" || t.toLowerCase() === "all") return;
+    if (!ordered.some((x) => x.toLowerCase() === t.toLowerCase())) ordered.push(t);
+  };
+  (state.categories || []).forEach(add);
+  Object.keys(state.dbCategoryCounts || {}).forEach(add);
+  Object.keys(state.videoDbCategoryCounts || {}).forEach(add);
+  return ordered;
+}
+
+function buildInlineCategoryOptionsHtml(selectedCategory) {
+  const cur = String(selectedCategory || "Uncategorized").trim() || "Uncategorized";
+  const cats = getEffectiveCategories();
+  if (cur !== "Uncategorized" && !cats.some((c) => c.toLowerCase() === cur.toLowerCase())) {
+    cats.push(cur);
+  }
+  return (
+    cats
+      .map((c) => `<option value="${esc(c)}" ${c.toLowerCase() === cur.toLowerCase() ? "selected" : ""}>${esc(c)}</option>`)
+      .join("") +
+    `<option value="Uncategorized" ${cur === "Uncategorized" ? "selected" : ""}>Uncategorized</option>` +
+    `<option value="__add__">+ New Category…</option>`
+  );
+}
+
+async function promptAddNewCategory() {
+  const raw = window.prompt("New thematic category name (e.g. Cooking, Mindset, Tech):");
+  if (!raw || !raw.trim()) return null;
+  try {
+    const res = await apiPost("/api/categories/add", { name: raw.trim() });
+    if (res?.ok && res.category) {
+      if (Array.isArray(res.categories)) state.categories = res.categories;
+      if (res.dbCounts) state.dbCategoryCounts = res.dbCounts;
+      if (res.videoDbCounts) state.videoDbCategoryCounts = res.videoDbCounts;
+      populateCategorySelects();
+      renderVideoDbCategoryBar();
+      renderMasterDbCategoryBar();
+      toast(`Category "${res.category}" added`);
+      return res.category;
+    }
+  } catch (_) {
+    toast("Could not create category");
+  }
+  return null;
+}
+
+function populateCategorySelects() {
+  const cats = getEffectiveCategories();
+  ["spyCategorySelect", "radarCategorySelect", "reproduceCategorySelect"].forEach((id) => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const prev = sel.value && sel.value !== "__add__" ? sel.value : "";
+    sel.innerHTML =
+      `<option value="">Auto Niche</option>` +
+      cats.map((c) => `<option value="${esc(c)}" ${c === prev ? "selected" : ""}>${esc(c)}</option>`).join("") +
+      `<option value="__add__">+ New Category…</option>`;
+    if (!sel.dataset.wiredAdd) {
+      sel.dataset.wiredAdd = "1";
+      sel.addEventListener("change", async () => {
+        if (sel.value === "__add__") {
+          const created = await promptAddNewCategory();
+          sel.value = created || "";
+        }
+      });
+    }
+  });
+}
+
+function renderCategoryBar(containerId, countsMap, totalCount, activeCat, onSelect) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const cats = getEffectiveCategories();
+  const visibleCats = cats.filter((c, idx) => {
+    if (c === "Health" || c === "Pets") return true;
+    if ((countsMap?.[c] || 0) > 0) return true;
+    if (activeCat && activeCat.toLowerCase() === c.toLowerCase()) return true;
+    return idx < 7 && !(
+      ["Fitness", "Beauty", "Finance", "Tech & AI", "Lifestyle"].includes(c) && (countsMap?.[c] || 0) === 0
+    );
+  });
+  if ((countsMap?.Uncategorized || 0) > 0 || activeCat === "Uncategorized") {
+    visibleCats.push("Uncategorized");
+  }
+
+  const pillsHtml = [
+    `<button type="button" class="cat-pill ${activeCat === "all" ? "is-active" : ""}" data-cat-filter="all">
+      <span>All</span>
+      <span class="cat-pill-count">${totalCount}</span>
+    </button>`,
+    ...visibleCats.map((c) => {
+      const cnt = countsMap?.[c] || 0;
+      const isAct = activeCat.toLowerCase() === c.toLowerCase();
+      return `<button type="button" class="cat-pill ${isAct ? "is-active" : ""}" data-cat-filter="${esc(c)}">
+        <span>${esc(c)}</span>
+        <span class="cat-pill-count">${cnt}</span>
+      </button>`;
+    }),
+    `<button type="button" class="cat-pill cat-pill-add" data-cat-add="1" title="Create a new thematic category">+ Category</button>`,
+  ].join("");
+
+  el.innerHTML = pillsHtml;
+  el.querySelectorAll("[data-cat-filter]").forEach((btn) => {
+    btn.addEventListener("click", () => onSelect(btn.dataset.catFilter));
+  });
+  el.querySelector("[data-cat-add]")?.addEventListener("click", async () => {
+    const created = await promptAddNewCategory();
+    if (created) onSelect(created);
+  });
+}
+
+function renderVideoDbCategoryBar() {
+  const packs = state.library.reproducePacks || [];
+  const liveCounts = {};
+  for (const p of packs) {
+    const c = p.category || "Uncategorized";
+    liveCounts[c] = (liveCounts[c] || 0) + 1;
+  }
+  state.videoDbCategoryCounts = liveCounts;
+  renderCategoryBar("videoDbCategoryBar", liveCounts, packs.length, state.videoDbCategory, (cat) => {
+    state.videoDbCategory = cat;
+    renderVideoDb();
+  });
+}
+
+function renderMasterDbCategoryBar() {
+  const total = state.library.postsDbCount || Object.values(state.dbCategoryCounts || {}).reduce((s, n) => s + n, 0);
+  renderCategoryBar("masterDbCategoryBar", state.dbCategoryCounts || {}, total, state.dbCategory, (cat) => {
+    state.dbCategory = cat;
+    refreshMasterDatabase();
+  });
+}
+
+async function assignCategoryToItem({ category, platform = "instagram", username = "", shortcode = "", applyToCreator = true }) {
+  const res = await apiPost("/api/categories/assign", {
+    category,
+    platform,
+    username,
+    shortcode,
+    applyToCreator,
+  });
+  if (!res?.ok) {
+    toast(res?.message || "Failed to update category");
+    return null;
+  }
+  const cat = res.category;
+  if (Array.isArray(res.categories)) state.categories = res.categories;
+  if (res.dbCounts) state.dbCategoryCounts = res.dbCounts;
+  if (res.videoDbCounts) state.videoDbCategoryCounts = res.videoDbCounts;
+
+  const cleanU = String(username || "").replace(/^@/, "").toLowerCase();
+  const matchItem = (it) => {
+    if (!it) return false;
+    const itCode = it.shortcode || it.code || "";
+    const itUser = String(it.username || "").replace(/^@/, "").toLowerCase();
+    if (shortcode && itCode === shortcode) return true;
+    if (applyToCreator && cleanU && itUser === cleanU) return true;
+    return false;
+  };
+
+  [
+    state.currentScan?.posts,
+    state.radarRun?.leaderboard,
+    state.dbPosts,
+    state.library.savedPosts,
+    state.library.reproducePacks,
+  ].forEach((arr) => {
+    if (!Array.isArray(arr)) return;
+    arr.forEach((it) => {
+      if (matchItem(it)) it.category = cat;
+    });
+  });
+  if (matchItem(state.activePost)) state.activePost.category = cat;
+
+  populateCategorySelects();
+  renderVideoDbCategoryBar();
+  renderMasterDbCategoryBar();
+  if (document.getElementById("view-spy").classList.contains("is-active")) renderSpyResults();
+  if (document.getElementById("view-radar").classList.contains("is-active")) renderRadarResults();
+  if (document.getElementById("view-videodb").classList.contains("is-active")) renderVideoDb();
+  if (document.getElementById("view-database").classList.contains("is-active")) refreshMasterDatabase();
+  if (document.getElementById("view-vault").classList.contains("is-active")) renderVault();
+
+  toast(
+    applyToCreator && cleanU
+      ? `Assigned @${cleanU} to "${cat}"`
+      : `Assigned post to "${cat}"`
+  );
+  return cat;
+}
+
+function applyHydratedPostInMemory(updated) {
+  if (!updated) return;
+  const code = updated.shortcode || updated.code || "";
+  if (!code) return;
+
+  const mergeInto = (it) => {
+    if (!it) return;
+    if ((it.shortcode || it.code) !== code) return;
+    if (updated.caption) it.caption = updated.caption;
+    if (updated.videoUrl) it.videoUrl = updated.videoUrl;
+    if (updated.thumbnailUrl && !it.thumbnailUrl) it.thumbnailUrl = updated.thumbnailUrl;
+    if (updated.username && !it.username) it.username = updated.username;
+    if (updated.category) it.category = updated.category;
+    if (updated.views != null && updated.views > 0) it.views = updated.views;
+    if (updated.likes != null && updated.likes >= 0) it.likes = updated.likes;
+    if (updated.comments != null && updated.comments >= 0) it.comments = updated.comments;
+  };
+
+  mergeInto(state.activePost);
+  [
+    state.currentScan?.posts,
+    state.radarRun?.leaderboard,
+    state.dbPosts,
+    state.library.savedPosts,
+    state.library.reproducePacks,
+  ].forEach((arr) => {
+    if (Array.isArray(arr)) arr.forEach(mergeInto);
+  });
+
+  if (updated.caption) {
+    document.querySelectorAll(`.reel-card[data-code="${CSS.escape(code)}"] .reel-caption`).forEach((el) => {
+      el.textContent = updated.caption;
+      el.classList.remove("is-muted-hint");
+    });
+  }
+}
+
+async function fetchPostDetailsForInspector(post, { force = false, silent = false } = {}) {
+  const code = post?.shortcode || post?.code || "";
+  if (!code) return null;
+  const capEl = document.getElementById("drawerCaption");
+  const refreshBtn = document.getElementById("refreshCaptionBtn");
+
+  if (state.activePost === post && capEl) {
+    capEl.textContent = "Retrieving post description from Instagram…";
+    capEl.classList.add("is-loading");
+  }
+  if (refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = "Fetching…";
+  }
+
+  try {
+    const res = await apiPost("/api/post-details", {
+      shortcode: code,
+      platform: post.platform || "instagram",
+      username: post.username || "",
+      url: post.url || "",
+      force,
+    });
+    if (!res?.ok || !res.post) {
+      if (state.activePost === post && capEl) {
+        capEl.classList.remove("is-loading");
+        capEl.textContent = post.caption || "Description unavailable (check Chrome connection)";
+      }
+      if (!silent) toast(res?.message || "Could not fetch post description");
+      return null;
+    }
+
+    applyHydratedPostInMemory(res.post);
+
+    if (state.activePost === post) {
+      if (capEl) {
+        capEl.classList.remove("is-loading");
+        capEl.textContent = res.post.caption || "No description written on this post.";
+      }
+      if (res.post.username) {
+        document.getElementById("drawerCreator").textContent = `@${res.post.username}`;
+      }
+      if (res.post.views != null) document.getElementById("drawerViews").textContent = fmtCompact(res.post.views);
+      if (res.post.likes != null) document.getElementById("drawerLikes").textContent = fmtCompact(res.post.likes);
+      if (res.post.comments != null) document.getElementById("drawerComments").textContent = fmtCompact(res.post.comments);
+
+      const dlBtn = document.getElementById("drawerDownloadMp4Btn");
+      if (res.post.videoUrl && dlBtn.hidden) {
+        dlBtn.hidden = false;
+        dlBtn.href = proxyMedia(res.post.videoUrl, true, `${res.post.username || "reel"}_${code}.mp4`);
+      }
+      const videoWrap = document.getElementById("drawerVideoWrap");
+      if (res.post.videoUrl && videoWrap && !videoWrap.querySelector("video")) {
+        const posterSrc = res.post.thumbnailUrl ? proxyMedia(res.post.thumbnailUrl) : "";
+        videoWrap.innerHTML = `<video src="${esc(proxyMedia(res.post.videoUrl))}" poster="${esc(
+          posterSrc
+        )}" controls playsinline preload="metadata"></video>`;
+      }
+    }
+
+    if (!silent) {
+      toast(res.post.caption ? "Post description retrieved & saved to DB" : "Verified: post has an empty caption");
+    }
+    return res.post;
+  } catch (_) {
+    if (state.activePost === post && capEl) {
+      capEl.classList.remove("is-loading");
+      capEl.textContent = post.caption || "Could not reach local Hub";
+    }
+    if (!silent) toast("Network error fetching post description");
+    return null;
+  } finally {
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = "Fetch";
+    }
+  }
+}
+
+async function batchHydrateTopCaptions({ posts = [], username = "", platform = "instagram" }, btn = null) {
+  const missing = (posts || []).filter((p) => !p.caption && (p.shortcode || p.code)).slice(0, 20);
+  const shortcodes = missing.map((p) => p.shortcode || p.code);
+  if (!shortcodes.length && !username) {
+    toast("All visible top posts already have their descriptions saved!");
+    return;
+  }
+  const orig = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Fetching Captions…";
+  }
+  setBanner(true, `Retrieving descriptions for ${shortcodes.length || 20} top posts via Chrome…`);
+  try {
+    const res = await apiPost("/api/hydrate-captions", {
+      shortcodes,
+      username,
+      platform,
+      limit: 20,
+    });
+    if (!res?.ok) {
+      toast(res?.message || "Caption hydration failed — verify Chrome is connected");
+      return;
+    }
+    await loadLibrary();
+    if (document.getElementById("view-database").classList.contains("is-active")) {
+      await refreshMasterDatabase();
+    }
+    toast(`Retrieved & saved ${res.hydrated || 0} post descriptions to Master DB!`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = orig || "Fetch Top Captions";
+    }
+    setBanner(false);
+  }
 }
 
 function updateSidebarCounts() {
@@ -305,14 +674,16 @@ function renderRecentScans() {
   }
   wrap.innerHTML = scans
     .slice(0, 14)
-    .map(
-      (sc, idx) => `
+    .map((sc, idx) => {
+      const firstCat = sc.category || sc.posts?.[0]?.category || "";
+      const tag = firstCat && firstCat !== "Uncategorized" ? firstCat : (sc.platform || "ig").slice(0, 2).toUpperCase();
+      return `
       <button type="button" class="recent-scan-btn" data-scan-idx="${idx}">
         <span>@${esc(sc.username)}</span>
-        <span class="recent-scan-meta">${esc((sc.platform || "ig").slice(0, 2).toUpperCase())} · ${(sc.posts || []).length}</span>
+        <span class="recent-scan-meta">${esc(tag)} · ${(sc.posts || []).length}</span>
       </button>
-    `
-    )
+    `;
+    })
     .join("");
 
   wrap.querySelectorAll(".recent-scan-btn").forEach((btn) => {
@@ -427,6 +798,8 @@ function buildMediaGridHtml(posts) {
       const saved = isPostSaved(code);
       const pack = getPackForCode(code);
       const age = fmtRelativeAge(p.createDate, p.ageHours);
+      const cat = p.category || "Uncategorized";
+      const hasCaption = Boolean(p.caption && String(p.caption).trim());
 
       return `
       <article class="reel-card" data-code="${esc(code)}" data-idx="${idx}">
@@ -453,7 +826,12 @@ function buildMediaGridHtml(posts) {
           </div>
         </div>
         <div class="reel-body">
-          <p class="reel-caption">${esc(p.caption || "No caption")}</p>
+          <div class="reel-cat-row">
+            <span class="badge-category" data-cat="${esc(cat)}">${esc(cat)}</span>
+          </div>
+          <p class="reel-caption ${hasCaption ? "" : "is-muted-hint"}">${esc(
+        hasCaption ? p.caption : "Click Inspect to load post description"
+      )}</p>
           <div class="reel-actions">
             <button type="button" class="card-btn is-primary" data-action="inspect">Inspect</button>
             <button type="button" class="card-btn ${pack ? "is-pack-ready" : "is-reproduce"}" data-action="reproduce" title="One-Shot Reproduce Pack (.zip + scenes + script + Skill prompt)">${
@@ -576,12 +954,13 @@ function exportPostsRows(rows, slug, format = "csv") {
     triggerBrowserDownload(URL.createObjectURL(blob), `${slug}.json`);
     return;
   }
-  const headers = ["Rank", "Platform", "Username", "Shortcode", "URL", "Created", "OutlierScore", "VelocityScore", "ViewsPerHour", "Views", "Likes", "Comments", "VideoMP4", "Caption"];
+  const headers = ["Rank", "Category", "Platform", "Username", "Shortcode", "URL", "Created", "OutlierScore", "VelocityScore", "ViewsPerHour", "Views", "Likes", "Comments", "VideoMP4", "Caption"];
   const csvLines = [
     headers.join(","),
     ...rows.map((r, i) =>
       [
         i + 1,
+        `"${String(r.category || "Uncategorized").replace(/"/g, '""')}"`,
         r.platform || "instagram",
         r.username || "",
         r.shortcode || r.code || "",
@@ -626,6 +1005,23 @@ function initCreatorSpy() {
     renderSpyResults();
   });
 
+  document.getElementById("spyHydrateCaptionsBtn")?.addEventListener("click", async (ev) => {
+    const scan = state.currentScan;
+    if (!scan?.posts?.length) {
+      toast("Scan or select a creator profile first");
+      return;
+    }
+    const sorted = sortPostsClient(scan.posts, state.spySort);
+    await batchHydrateTopCaptions(
+      {
+        posts: sorted,
+        username: scan.username,
+        platform: scan.platform || state.platform,
+      },
+      ev.currentTarget
+    );
+  });
+
   document.querySelectorAll(".sample-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
       document.getElementById("spyUsernameInput").value = chip.dataset.sample;
@@ -640,6 +1036,8 @@ function initCreatorSpy() {
     const surface = document.getElementById("spySurfaceSelect").value;
     const rawDepth = document.getElementById("spyDepthSelect").value;
     const depth = rawDepth === "all" ? "all" : Number(rawDepth || 60);
+    const categorySel = document.getElementById("spyCategorySelect")?.value || "";
+    const category = categorySel === "__add__" ? "" : categorySel;
     const btn = document.getElementById("spySubmitBtn");
 
     btn.disabled = true;
@@ -651,6 +1049,7 @@ function initCreatorSpy() {
         surface,
         sortBy: state.spySort,
         depth,
+        category,
       });
       if (!res?.ok) {
         toast(res?.message || "Sort failed — check Chrome & sign-in");
@@ -863,6 +1262,8 @@ function initNicheRadar() {
 
     const rawRadarDepth = document.getElementById("radarDepthSelect").value;
     const perAccountDepth = rawRadarDepth === "all" ? "all" : Number(rawRadarDepth || 36);
+    const radarCatVal = document.getElementById("radarCategorySelect")?.value || "";
+    const category = radarCatVal === "__add__" ? "" : radarCatVal;
     const btn = document.getElementById("runRadarBtn");
     btn.disabled = true;
     setBanner(true, `Scraping ${tokens.length || 6} accounts simultaneously in parallel…`);
@@ -877,6 +1278,7 @@ function initNicheRadar() {
         perAccountDepth,
         sortBy: state.radarSort,
         concurrency: 3,
+        category,
       });
       if (!res?.ok) {
         toast(res?.message || "Niche Radar failed");
@@ -901,12 +1303,37 @@ function initNicheRadar() {
 // ── View 3: Video Database (VideoBot Reproduce Packs) ───────────────────────
 
 function renderVideoDb() {
-  const packs = state.library.reproducePacks || [];
+  const allPacks = state.library.reproducePacks || [];
+  renderVideoDbCategoryBar();
+
+  const packs =
+    state.videoDbCategory === "all"
+      ? allPacks
+      : allPacks.filter(
+          (p) => String(p.category || "Uncategorized").toLowerCase() === state.videoDbCategory.toLowerCase()
+        );
+
   const emptyEl = document.getElementById("videoDbEmptyState");
+  const emptyTitle = document.getElementById("videoDbEmptyTitle");
+  const emptyDesc = document.getElementById("videoDbEmptyDesc");
   const listEl = document.getElementById("videoDbList");
 
   if (!packs.length) {
     emptyEl.hidden = false;
+    if (allPacks.length > 0 && state.videoDbCategory !== "all") {
+      if (emptyTitle) emptyTitle.textContent = `No Reproduce Packs in "${state.videoDbCategory}" yet`;
+      if (emptyDesc) {
+        emptyDesc.innerHTML = `Paste a Reel link above with <strong>${esc(
+          state.videoDbCategory
+        )}</strong> selected, or click <strong>Reproduce</strong> on any ${esc(state.videoDbCategory)} post.`;
+      }
+    } else {
+      if (emptyTitle) emptyTitle.textContent = "No Reproduce Packs yet";
+      if (emptyDesc) {
+        emptyDesc.innerHTML =
+          'Paste a Reel link above, click <strong>Reproduce</strong> on any card in Studio, or click the clapperboard icon right above Save directly on Instagram &amp; TikTok.';
+      }
+    }
     listEl.innerHTML = "";
     return;
   }
@@ -919,6 +1346,8 @@ function renderVideoDb() {
         typeof p.outlierScore === "number"
           ? `<span class="badge-outlier ${p.outlierScore >= 2.5 ? "is-hot" : ""}">${p.outlierScore.toFixed(1)}x</span>`
           : "";
+      const cat = p.category || "Uncategorized";
+      const hasCap = Boolean(p.caption && String(p.caption).trim());
 
       return `
       <article class="pack-row-card" data-pack-id="${esc(p.packId)}">
@@ -931,6 +1360,9 @@ function renderVideoDb() {
             <div class="pack-title-line">
               <span class="pack-id-code">${esc(p.packId)}.zip</span>
               ${p.username ? `<strong>@${esc(p.username)}</strong>` : ""}
+              <select class="category-select-pill" data-pack-cat data-cat="${esc(cat)}" title="Change thematic category">
+                ${buildInlineCategoryOptionsHtml(cat)}
+              </select>
               ${outBadge}
               <span class="mini-tag">${p.sceneCount || 0} scenes · ${Math.round(p.durationSeconds || 0)}s</span>
               ${p.wordsPerMinute ? `<span class="mini-tag">${p.wordsPerMinute} WPM</span>` : ""}
@@ -939,6 +1371,23 @@ function renderVideoDb() {
             ${p.spokenHook ? `<p class="pack-hook-quote">“${esc(p.spokenHook)}”</p>` : ""}
             ${p.onScreenHook ? `<p class="pack-ocr-line">On-Screen OCR: ${esc(p.onScreenHook)}</p>` : ""}
             <p class="pack-transcript-preview">${esc(p.transcript || "No spoken dialogue detected.")}</p>
+
+            <div class="pack-caption-box">
+              <div class="pack-caption-head">
+                <span class="section-eyebrow">Post Description (caption.txt)</span>
+                <div class="drawer-caption-actions">
+                  ${
+                    hasCap
+                      ? `<button type="button" class="btn-ghost-xs" data-pack-act="copy-caption">Copy Caption</button>`
+                      : `<button type="button" class="btn-ghost-xs" data-pack-act="fetch-caption">Fetch Description</button>`
+                  }
+                </div>
+              </div>
+              <p class="pack-caption-text">${esc(
+                hasCap ? p.caption : "No caption cached yet — click Fetch Description to retrieve from Instagram."
+              )}</p>
+            </div>
+
             <div class="pack-path-line" title="${esc(p.folderPath)}">Local folder: ${esc(p.folderPath)}</div>
           </div>
 
@@ -990,8 +1439,47 @@ function renderVideoDb() {
 
   listEl.querySelectorAll(".pack-row-card").forEach((card) => {
     const packId = card.dataset.packId;
-    const pack = packs.find((x) => x.packId === packId);
+    const pack = allPacks.find((x) => x.packId === packId);
     if (!pack) return;
+
+    card.querySelector("[data-pack-cat]")?.addEventListener("change", async (ev) => {
+      const sel = ev.currentTarget;
+      let chosen = sel.value;
+      if (chosen === "__add__") {
+        const created = await promptAddNewCategory();
+        if (!created) {
+          sel.value = pack.category || "Uncategorized";
+          return;
+        }
+        chosen = created;
+      }
+      await assignCategoryToItem({
+        category: chosen,
+        platform: pack.platform || "instagram",
+        username: pack.username || "",
+        shortcode: pack.shortcode || "",
+        applyToCreator: Boolean(pack.username),
+      });
+    });
+
+    card.querySelector('[data-pack-act="copy-caption"]')?.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(pack.caption || "");
+      toast("Copied original post description!");
+    });
+
+    card.querySelector('[data-pack-act="fetch-caption"]')?.addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      btn.textContent = "Fetching…";
+      const updated = await fetchPostDetailsForInspector(pack, { force: true, silent: false });
+      if (updated?.caption) {
+        pack.caption = updated.caption;
+        renderVideoDb();
+      } else {
+        btn.disabled = false;
+        btn.textContent = "Fetch Description";
+      }
+    });
 
     card.querySelector('[data-pack-act="copy-skill"]')?.addEventListener("click", async () => {
       await navigator.clipboard.writeText(pack.skillPrompt || "");
@@ -1020,8 +1508,10 @@ function initVideoDbView() {
     const input = document.getElementById("reproduceUrlInput");
     const url = input.value.trim();
     if (!url) return;
+    const catSel = document.getElementById("reproduceCategorySelect")?.value || "";
+    const category = catSel === "__add__" ? "" : catSel;
     const btn = document.getElementById("reproduceSubmitBtn");
-    const pack = await runOneShotReproduce({ url }, btn);
+    const pack = await runOneShotReproduce({ url, category }, btn);
     if (pack) {
       input.value = "";
       state.expandedPacks.add(pack.packId);
@@ -1045,6 +1535,7 @@ async function refreshMasterDatabase() {
     search,
     username,
     platform,
+    category: state.dbCategory,
     minOutlier,
     savedOnly,
     reproducedOnly,
@@ -1057,6 +1548,9 @@ async function refreshMasterDatabase() {
     if (!res?.ok) return;
     state.dbPosts = res.posts || [];
     state.library.postsDbCount = res.totalInDb || 0;
+    if (res.categoryCounts) state.dbCategoryCounts = res.categoryCounts;
+    if (Array.isArray(res.categories) && res.categories.length) state.categories = res.categories;
+    renderMasterDbCategoryBar();
     updateSidebarCounts();
 
     // Populate creator dropdown preserving current selection
@@ -1101,11 +1595,19 @@ function initMasterDatabaseView() {
     });
   });
 
+  document.getElementById("dbHydrateCaptionsBtn")?.addEventListener("click", async (ev) => {
+    if (!state.dbPosts.length) {
+      toast("No posts in current filter");
+      return;
+    }
+    await batchHydrateTopCaptions({ posts: state.dbPosts }, ev.currentTarget);
+  });
+
   document.getElementById("dbExportCsvBtn").addEventListener("click", () => {
-    exportPostsRows(state.dbPosts, `viralspy_master_db_${state.dbSort}`, "csv");
+    exportPostsRows(state.dbPosts, `viralspy_master_db_${state.dbCategory}_${state.dbSort}`, "csv");
   });
   document.getElementById("dbExportJsonBtn").addEventListener("click", () => {
-    exportPostsRows(state.dbPosts, `viralspy_master_db_${state.dbSort}`, "json");
+    exportPostsRows(state.dbPosts, `viralspy_master_db_${state.dbCategory}_${state.dbSort}`, "json");
   });
 }
 
@@ -1354,6 +1856,13 @@ async function openInspector(post) {
   const code = post.shortcode || post.code || "";
 
   document.getElementById("drawerCreator").textContent = `@${post.username || "creator"}`;
+  const drawerCatSel = document.getElementById("drawerCategorySelect");
+  const curCat = post.category || "Uncategorized";
+  if (drawerCatSel) {
+    drawerCatSel.innerHTML = buildInlineCategoryOptionsHtml(curCat);
+    drawerCatSel.setAttribute("data-cat", curCat);
+  }
+
   const badges = [];
   if (typeof post.outlierScore === "number") {
     badges.push(`<span class="badge-outlier ${post.outlierScore >= 2.5 ? "is-hot" : ""}">${post.outlierScore.toFixed(1)}x</span>`);
@@ -1382,7 +1891,17 @@ async function openInspector(post) {
     post.viewsPerHour != null ? `${fmtCompact(post.viewsPerHour)}/h` : "—";
   document.getElementById("drawerLikes").textContent = fmtCompact(post.likes);
   document.getElementById("drawerComments").textContent = fmtCompact(post.comments);
-  document.getElementById("drawerCaption").textContent = post.caption || "No caption";
+
+  const capEl = document.getElementById("drawerCaption");
+  const resolvedCaption = post.caption || existingPack?.caption || "";
+  if (resolvedCaption) {
+    post.caption = resolvedCaption;
+    capEl.classList.remove("is-loading");
+    capEl.textContent = resolvedCaption;
+  } else {
+    capEl.classList.add("is-loading");
+    capEl.textContent = "Retrieving post description from Instagram…";
+  }
 
   const videoWrap = document.getElementById("drawerVideoWrap");
   const vidSrc = existingPack?.videoAssetUrl || (post.videoUrl ? proxyMedia(post.videoUrl) : "");
@@ -1428,6 +1947,11 @@ async function openInspector(post) {
   const drawer = document.getElementById("inspectorDrawer");
   drawer.classList.add("is-open");
   drawer.setAttribute("aria-hidden", "false");
+
+  // Auto-fetch missing post description immediately from Instagram via Chrome extension
+  if (!resolvedCaption && code) {
+    fetchPostDetailsForInspector(post, { force: false, silent: true });
+  }
 }
 
 function closeInspector() {
@@ -1467,6 +1991,44 @@ function initInspectorDrawer() {
   document.getElementById("inspectorBackdrop").addEventListener("click", closeInspector);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeInspector();
+  });
+
+  document.getElementById("drawerCategorySelect")?.addEventListener("change", async (ev) => {
+    const post = state.activePost;
+    if (!post) return;
+    const sel = ev.currentTarget;
+    let chosen = sel.value;
+    if (chosen === "__add__") {
+      const created = await promptAddNewCategory();
+      if (!created) {
+        sel.value = post.category || "Uncategorized";
+        return;
+      }
+      chosen = created;
+    }
+    const updatedCat = await assignCategoryToItem({
+      category: chosen,
+      platform: post.platform || "instagram",
+      username: post.username || "",
+      shortcode: post.shortcode || post.code || "",
+      applyToCreator: Boolean(post.username),
+    });
+    if (updatedCat) {
+      sel.innerHTML = buildInlineCategoryOptionsHtml(updatedCat);
+      sel.setAttribute("data-cat", updatedCat);
+    }
+  });
+
+  document.getElementById("refreshCaptionBtn")?.addEventListener("click", async () => {
+    if (!state.activePost) return;
+    await fetchPostDetailsForInspector(state.activePost, { force: true, silent: false });
+  });
+
+  document.getElementById("copyCaptionBtn")?.addEventListener("click", () => {
+    const txt = state.activePost?.caption || document.getElementById("drawerCaption")?.textContent || "";
+    if (!txt || txt.startsWith("Retrieving post description")) return;
+    navigator.clipboard.writeText(txt);
+    toast("Copied post description to clipboard");
   });
 
   document.getElementById("drawerReproduceBtn").addEventListener("click", async (ev) => {
