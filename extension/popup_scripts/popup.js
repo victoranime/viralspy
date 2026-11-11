@@ -1652,6 +1652,7 @@ function _sfResortedMessage(message) {
     saves: "saves",
     oldest: "oldest first",
     outlier: "outlier score",
+    velocity: "velocity",
   }[message.sort_by];
   return by ? `Re-sorted by ${by}` : "Re-sorted";
 }

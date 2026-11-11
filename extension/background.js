@@ -1004,6 +1004,86 @@ async function isUserSortFeedPro() {
   return true;
 }
 
+// Auto-recovers tabs that were already open before an extension reload/update:
+// if `chrome.tabs.sendMessage` hits "Receiving end does not exist", sets the
+// sort sessionStorage keys via `chrome.scripting.executeScript` and reloads/navigates
+// the tab so `document_start` content scripts attach and run the sort immediately.
+function sendSortMessageWithAutoReload(tab, payload, platform) {
+  if (!tab?.id) return;
+  chrome.tabs.sendMessage(tab.id, payload, () => {
+    const err = chrome.runtime.lastError;
+    if (!err || !/Receiving end does not exist/i.test(err.message || "")) return;
+    try {
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        args: [payload, platform],
+        func: (msg, plat) => {
+          try {
+            if (plat === "ig") {
+              const parts = location.pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+              const reserved = new Set(["explore", "reels", "reel", "p", "tv", "stories", "direct", "accounts", "challenge", "about", "legal", "developer"]);
+              const isExplore = /^\/explore\/search\//.test(location.pathname);
+              const isSaved = /^\/[^/]+\/saved(?:\/|$)/.test(location.pathname);
+              const isProfile = parts.length >= 1 && !reserved.has((parts[0] || "").toLowerCase());
+
+              sessionStorage.removeItem("sortFeedData");
+              sessionStorage.removeItem("sortFeedStopSorting");
+              sessionStorage.setItem("sortFeedSortBy", msg.sort_by);
+              sessionStorage.setItem("sortFeedNoItems", msg.no_items);
+              sessionStorage.setItem("sortFeedStatus", "true");
+              sessionStorage.setItem("sortItemsVsDates", msg.dates_items);
+
+              if (isExplore) {
+                sessionStorage.setItem("sortFeedSurface", "explore_search");
+                sessionStorage.setItem("sortFeedPostsVSReels", "Posts");
+                sessionStorage.setItem("sortFeedPrepLabel", "search");
+                location.reload();
+                return;
+              }
+              if (isSaved) {
+                sessionStorage.setItem("sortFeedSurface", "saved");
+                sessionStorage.setItem("sortFeedPostsVSReels", "Posts");
+                sessionStorage.setItem("sortFeedPrepLabel", "saved");
+                location.reload();
+                return;
+              }
+              if (isProfile) {
+                sessionStorage.removeItem("sortFeedSurface");
+                const sub = (parts[1] || "").toLowerCase();
+                const goReels = sub === "reels" || msg.sort_by === "views";
+                sessionStorage.setItem("sortFeedPostsVSReels", goReels ? "Reels" : "Posts");
+                if (msg.outlier_scores) sessionStorage.setItem("sortFeedOutlier", "on");
+                else sessionStorage.removeItem("sortFeedOutlier");
+                sessionStorage.setItem("sortFeedPrepLabel", "profile");
+                if (goReels && sub !== "reels") {
+                  location.href = "/" + parts[0] + "/reels/";
+                } else {
+                  location.reload();
+                }
+                return;
+              }
+            } else if (plat === "tt") {
+              sessionStorage.removeItem("sortFeedData");
+              sessionStorage.removeItem("sortFeedStopSorting");
+              sessionStorage.setItem("sortFeedSortBy", msg.sort_by);
+              sessionStorage.setItem("sortFeedNoItems", msg.no_items);
+              sessionStorage.setItem("sortFeedStatusTikTok", "true");
+              sessionStorage.setItem("sortItemsVsDates", msg.dates_items);
+              if (msg.outlier_scores) sessionStorage.setItem("sortFeedOutlierTikTok", "on");
+              else sessionStorage.removeItem("sortFeedOutlierTikTok");
+              location.reload();
+              return;
+            }
+            location.reload();
+          } catch (_) {
+            location.reload();
+          }
+        },
+      });
+    } catch (_) {}
+  });
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // handel message coming from content script
@@ -1040,13 +1120,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (allowItemRefresh || allowDateRefresh) {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        chrome.tabs.sendMessage(tabs[0].id, {
-          action: "refreshPage",
-          sort_by: message.sort_by,
-          no_items: message.no_items,
-          dates_items: message.dates_items,
-          outlier_scores: message.outlier_scores === true,
-        });
+        sendSortMessageWithAutoReload(
+          tabs?.[0],
+          {
+            action: "refreshPage",
+            sort_by: message.sort_by,
+            no_items: message.no_items,
+            dates_items: message.dates_items,
+            outlier_scores: message.outlier_scores === true,
+          },
+          "ig"
+        );
       });
     }
   })();
@@ -1069,13 +1153,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (allowItemRefresh || allowDateRefresh) {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        chrome.tabs.sendMessage(tabs[0].id, {
-          action: "refreshPageTikTok",
-          sort_by: message.sort_by,
-          no_items: message.no_items,
-          dates_items: message.dates_items,
-          outlier_scores: message.outlier_scores === true,
-        });
+        sendSortMessageWithAutoReload(
+          tabs?.[0],
+          {
+            action: "refreshPageTikTok",
+            sort_by: message.sort_by,
+            no_items: message.no_items,
+            dates_items: message.dates_items,
+            outlier_scores: message.outlier_scores === true,
+          },
+          "tt"
+        );
       });
     }
   })();
@@ -1098,13 +1186,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (allowItemRefresh || allowDateRefresh) {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        chrome.tabs.sendMessage(tabs[0].id, {
-          action: "refreshPageFacebook",
-          sort_by: message.sort_by,
-          no_items: message.no_items,
-          dates_items: message.dates_items,
-          outlier_scores: message.outlier_scores === true,
-        });
+        sendSortMessageWithAutoReload(
+          tabs?.[0],
+          {
+            action: "refreshPageFacebook",
+            sort_by: message.sort_by,
+            no_items: message.no_items,
+            dates_items: message.dates_items,
+            outlier_scores: message.outlier_scores === true,
+          },
+          "fb"
+        );
       });
     }
   })();
@@ -1130,13 +1222,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (allowItemRefresh || allowDateRefresh) {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        chrome.tabs.sendMessage(tabs[0].id, {
-          action: "refreshPageYouTube",
-          sort_by: message.sort_by,
-          no_items: message.no_items,
-          dates_items: message.dates_items,
-          outlier_scores: message.outlier_scores === true,
-        });
+        sendSortMessageWithAutoReload(
+          tabs?.[0],
+          {
+            action: "refreshPageYouTube",
+            sort_by: message.sort_by,
+            no_items: message.no_items,
+            dates_items: message.dates_items,
+            outlier_scores: message.outlier_scores === true,
+          },
+          "yt"
+        );
       });
     }
   })();
