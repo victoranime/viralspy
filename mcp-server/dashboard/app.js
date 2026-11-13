@@ -19,6 +19,16 @@ const state = {
   videoDbCategoryCounts: {},
   expandedPacks: new Set(),
   vaultTab: "saved",
+  myAccounts: {
+    activeAccountId: "pets_wade",
+    subTab: "priority",
+    ctaFilter: "all",
+    excludeLocalDrafts: false,
+    ownSort: "outlier",
+    reproFilter: "all",
+    selectedCtaByCode: {},
+    data: null,
+  },
   library: {
     savedPosts: [],
     reproducePacks: [],
@@ -151,6 +161,7 @@ function switchView(viewName) {
   document.querySelectorAll(".view-panel").forEach((panel) => {
     panel.classList.toggle("is-active", panel.id === `view-${viewName}`);
   });
+  if (viewName === "accounts") loadMyAccounts();
   if (viewName === "vault") renderVault();
   if (viewName === "videodb") renderVideoDb();
   if (viewName === "database") refreshMasterDatabase();
@@ -158,7 +169,8 @@ function switchView(viewName) {
 
 function syncViewFromHash() {
   const h = (window.location.hash || "").replace(/^#/, "").toLowerCase();
-  if (h === "saved" || h === "vault") switchView("vault");
+  if (h === "accounts" || h === "my-accounts") switchView("accounts");
+  else if (h === "saved" || h === "vault") switchView("vault");
   else if (h === "videodb" || h === "reproduce") switchView("videodb");
   else if (h === "database" || h === "db") switchView("database");
   else if (h === "radar") switchView("radar");
@@ -2125,11 +2137,581 @@ function initInspectorDrawer() {
   });
 }
 
+// ── View 0: My Accounts Intelligence Hub ────────────────────────────────────
+
+async function loadMyAccounts() {
+  try {
+    const qs = new URLSearchParams({
+      accountId: state.myAccounts.activeAccountId || "pets_wade",
+      excludeLocalDrafts: state.myAccounts.excludeLocalDrafts ? "1" : "0",
+    });
+    const res = await fetch(`/api/my-accounts?${qs.toString()}`).then((r) => r.json());
+    if (!res?.ok) return;
+    state.myAccounts.data = res;
+    if (res.activeAccountId) state.myAccounts.activeAccountId = res.activeAccountId;
+    renderMyAccounts();
+  } catch (_) {}
+}
+
+function renderMyAccounts() {
+  const data = state.myAccounts.data;
+  if (!data || !data.account) return;
+  const acc = data.account;
+  const kpis = data.kpis || {};
+  const cron = data.cron || {};
+
+  // Account Switcher Pills
+  const seg = document.getElementById("accountsProfileSeg");
+  if (seg) {
+    seg.innerHTML = (data.accounts || [])
+      .map(
+        (a) =>
+          `<button type="button" class="seg-btn ${a.id === acc.id ? "is-active" : ""}" data-acc-id="${esc(a.id)}">@${esc(
+            a.username
+          )} · ${esc(a.category || "Niche")}</button>`
+      )
+      .join("");
+    seg.querySelectorAll(".seg-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const nextId = btn.dataset.accId;
+        state.myAccounts.activeAccountId = nextId;
+        await apiPost("/api/my-accounts/config", { action: "setActiveAccount", accountId: nextId });
+        await loadMyAccounts();
+      });
+    });
+  }
+
+  // Cron bar
+  const cronPill = document.getElementById("cronStatusPill");
+  const cronSel = document.getElementById("cronIntervalSelect");
+  if (cronSel) {
+    cronSel.value = cron.enabled ? String(cron.intervalHours || 6) : "0";
+  }
+  if (cronPill) {
+    const lastTxt = cron.lastRunAt ? `Last sync: ${fmtRelativeAge(cron.lastRunAt)}` : "Waiting for 1st sync";
+    const nextTxt = cron.enabled && cron.nextRunAt ? `Next: ${fmtRelativeAge(cron.nextRunAt).replace(" ago", "")}` : "Paused";
+    cronPill.textContent = cron.running
+      ? "⏳ Cron Sync Running…"
+      : cron.enabled
+      ? `⏱ Auto-Cron ${cron.intervalHours || 6}h · ${lastTxt}`
+      : `⏸ Auto-Cron Paused · ${lastTxt}`;
+    cronPill.classList.toggle("is-running", !!cron.running);
+    cronPill.title = `Next scheduled check: ${nextTxt}`;
+  }
+
+  const syncOwnBtn = document.getElementById("syncOwnAccountBtn");
+  if (syncOwnBtn) syncOwnBtn.textContent = `Sync @${acc.username}`;
+
+  // KPI cards
+  document.getElementById("accKpiOwnCount").textContent = String(kpis.ownPublishedCount || 0);
+  document.getElementById("accKpiOwnSub").textContent = `${kpis.localReelsCount || 0} reels in local Reels/ folder`;
+
+  document.getElementById("accKpiOwnPerf").textContent = kpis.ownMedianViews
+    ? `${fmtCompact(kpis.ownMedianViews)} med`
+    : "—";
+  document.getElementById("accKpiOwnPerfSub").textContent = kpis.ownPeakOutlier
+    ? `Peak ${kpis.ownPeakOutlier}x outlier on @${acc.username}`
+    : `Click Sync @${acc.username} to benchmark`;
+
+  document.getElementById("accKpiReproCount").textContent = `${kpis.reproducedPublishedCount || 0} IG`;
+  document.getElementById("accKpiReproSub").textContent = `+${kpis.reproducedLocalDraftCount || 0} prepared locally (not posted yet)`;
+
+  document.getElementById("accKpiCompCount").textContent = `${kpis.trackedCompetitorsCount || 0} creators`;
+  document.getElementById("accKpiCompSub").textContent = `${fmtCompact(kpis.competitorPostsCount || 0)} posts · ${
+    kpis.recent7dBreakouts || 0
+  } breakouts (7d)`;
+
+  // Sub-tabs visibility
+  const sub = state.myAccounts.subTab || "priority";
+  document.querySelectorAll("#accountsSubTabSeg .seg-btn").forEach((b) => {
+    b.classList.toggle("is-active", b.dataset.acctab === sub);
+  });
+  ["priority", "own", "reproduced", "competitors"].forEach((name) => {
+    const el = document.getElementById(`accPanel-${name}`);
+    if (el) el.hidden = name !== sub;
+  });
+
+  if (sub === "priority") renderAccountsPriorityTab(data);
+  if (sub === "own") renderAccountsOwnPostsTab(data);
+  if (sub === "reproduced") renderAccountsReproTab(data);
+  if (sub === "competitors") renderAccountsCompetitorsTab(data);
+}
+
+function getSelectedCtaVariant(post) {
+  const chosenKey = state.myAccounts.selectedCtaByCode[post.code] || post.cta?.recommendedCtaType || "multivitamin";
+  return post.cta?.variants?.[chosenKey] || post.cta;
+}
+
+function renderAccountsPriorityTab(data) {
+  const listEl = document.getElementById("accPriorityList");
+  if (!listEl) return;
+  const ctaFilter = state.myAccounts.ctaFilter || "all";
+  let items = [...(data.priorityTop10 || [])];
+  if (ctaFilter !== "all") {
+    items = items.filter((p) => {
+      const selKey = state.myAccounts.selectedCtaByCode[p.code] || p.cta?.recommendedCtaType;
+      return selKey === ctaFilter;
+    });
+  }
+
+  if (!items.length) {
+    listEl.innerHTML = `<div class="empty-stage"><h2>No Priority Candidates in This Filter</h2><p>Switch CTA filter back to All CTAs or run Sync All to fetch fresh competitor breakouts.</p></div>`;
+    return;
+  }
+
+  listEl.innerHTML = items
+    .map((p) => {
+      const code = p.code || p.shortcode || "";
+      const coverSrc = p.thumbnailUrl ? proxyMedia(p.thumbnailUrl) : "";
+      const pack = getPackForCode(code);
+      const chosenKey = state.myAccounts.selectedCtaByCode[code] || p.cta?.recommendedCtaType || "multivitamin";
+      const activeVar = getSelectedCtaVariant(p) || {};
+      const variantsArr = Object.values(p.cta?.variants || {});
+      const hookPreview = p.spokenHook || p.onScreenHook || p.caption || "Click Inspect or Reproduce .zip to extract spoken hook & scenes.";
+      const age = fmtRelativeAge(p.createDate, p.ageHours);
+
+      return `
+      <article class="priority-card" data-code="${esc(code)}">
+        <div class="priority-thumb-col" data-action="inspect">
+          ${
+            coverSrc
+              ? `<img src="${esc(coverSrc)}" alt="" loading="lazy" />`
+              : `<div class="priority-no-thumb">9:16</div>`
+          }
+          <span class="priority-rank-badge">#${p.priorityRank || 1} PRIO</span>
+          ${p.outlierScore != null ? `<span class="priority-outlier-badge">${p.outlierScore.toFixed(1)}x</span>` : ""}
+        </div>
+
+        <div class="priority-main-col">
+          <div class="priority-head-row">
+            <div class="priority-creator-group">
+              <strong class="priority-creator">@${esc(p.username || "competitor")}</strong>
+              <span class="priority-score-pill">Score ${p.priorityScore}/100</span>
+              ${
+                p.reproStatus === "local_draft_only" && p.localDraft
+                  ? `<span class="mini-tag is-warn-tag" title="Prepared locally in ${esc(
+                      p.localDraft.folderName
+                    )} but not detected live on @${esc(data.account.username)}">📁 Local Reel #${esc(
+                      p.localDraft.reelNumber
+                    )} (Not on IG)</span>`
+                  : `<span class="mini-tag is-fresh-tag">New Opportunity</span>`
+              }
+            </div>
+            <div class="priority-metrics-row">
+              ${p.views != null ? `<span>▶ ${fmtCompact(p.views)}</span>` : ""}
+              ${p.viewsPerHour != null ? `<span>⚡ ${fmtCompact(p.viewsPerHour)}/h</span>` : ""}
+              ${p.comments != null ? `<span>💬 ${fmtCompact(p.comments)}</span>` : ""}
+              ${age ? `<span>${esc(age)}</span>` : ""}
+            </div>
+          </div>
+
+          <div class="priority-reasons-row">
+            ${(p.priorityReasons || []).map((r) => `<span class="reason-chip">${esc(r)}</span>`).join("")}
+          </div>
+
+          <p class="priority-hook-preview">${esc(hookPreview.slice(0, 260))}${hookPreview.length > 260 ? "…" : ""}</p>
+
+          <!-- Interactive CTA & Funnel Studio -->
+          <div class="cta-studio-box">
+            <div class="cta-studio-head">
+              <div class="cta-pills-row">
+                ${variantsArr
+                  .map(
+                    (v) => `
+                  <button type="button" class="cta-pill ${v.key === chosenKey ? "is-active" : ""} ${
+                      v.key === p.cta?.recommendedCtaType ? "is-recommended" : ""
+                    }" data-action="switch-cta" data-cta-key="${esc(v.key)}">
+                    ${v.key === p.cta?.recommendedCtaType ? "✦ " : ""}${esc(v.label)}
+                  </button>`
+                  )
+                  .join("")}
+              </div>
+              <span class="cta-kw-badge">Keyword: <strong>${esc(activeVar.keyword || "HABITS")}</strong></span>
+            </div>
+
+            <p class="cta-why-line">${esc(
+              chosenKey === p.cta?.recommendedCtaType ? p.cta?.whyAngle || activeVar.why : activeVar.why || ""
+            )}</p>
+
+            <div class="cta-script-box">
+              <div class="cta-script-label">Ready-to-shoot Transition + CTA (${esc(activeVar.productName || activeVar.label || "")})</div>
+              <p class="cta-script-text">"${esc(activeVar.transitionLine || "")} ${esc(activeVar.ctaLine || "")}"</p>
+            </div>
+          </div>
+
+          <div class="priority-actions-row">
+            <button type="button" class="btn-secondary btn-sm" data-action="copy-cta">Copy CTA Script</button>
+            <button type="button" class="btn-primary btn-sm" data-action="reproduce">${
+              pack ? "Pack .zip ✓" : "Reproduce .zip ✦"
+            }</button>
+            <button type="button" class="btn-secondary btn-sm" data-action="inspect">Inspect Reel</button>
+            <a href="${esc(p.url || `https://www.instagram.com/reel/${code}/`)}" target="_blank" rel="noopener noreferrer" class="btn-secondary btn-sm">Open IG ↗</a>
+            <button type="button" class="btn-ghost-xs" data-action="mark-done" title="Mark as already reproduced on IG">Mark Done ✓</button>
+            <button type="button" class="btn-ghost-xs" data-action="ignore" title="Skip this candidate from Top 10">Skip ✕</button>
+          </div>
+        </div>
+      </article>
+      `;
+    })
+    .join("");
+
+  listEl.querySelectorAll(".priority-card").forEach((card) => {
+    const code = card.dataset.code;
+    const post = (data.priorityTop10 || []).find((x) => (x.code || x.shortcode) === code);
+    if (!post) return;
+
+    card.querySelectorAll('[data-action="inspect"]').forEach((el) => {
+      el.addEventListener("click", () => openInspector(post));
+    });
+
+    card.querySelectorAll('[data-action="switch-cta"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.myAccounts.selectedCtaByCode[code] = btn.dataset.ctaKey;
+        renderAccountsPriorityTab(data);
+      });
+    });
+
+    card.querySelector('[data-action="copy-cta"]')?.addEventListener("click", async () => {
+      const v = getSelectedCtaVariant(post);
+      const txt = `Keyword: ${v.keyword}\nProduct/Funnel: ${v.productName}\nScript:\n${v.transitionLine} ${v.ctaLine}`;
+      await navigator.clipboard.writeText(txt);
+      toast(`Copied ${v.label} CTA script (${v.keyword})`);
+    });
+
+    card.querySelector('[data-action="reproduce"]')?.addEventListener("click", async (ev) => {
+      await runOneShotReproduce(post, ev.currentTarget);
+      await loadMyAccounts();
+    });
+
+    card.querySelector('[data-action="mark-done"]')?.addEventListener("click", async () => {
+      const res = await apiPost("/api/my-accounts/config", {
+        action: "markReproduced",
+        shortcode: code,
+        status: "published",
+      });
+      if (res?.ok) {
+        state.myAccounts.data = res;
+        renderMyAccounts();
+        toast("Marked as published on your account — Top 10 updated");
+      }
+    });
+
+    card.querySelector('[data-action="ignore"]')?.addEventListener("click", async () => {
+      const res = await apiPost("/api/my-accounts/config", {
+        action: "markReproduced",
+        shortcode: code,
+        status: "ignored",
+      });
+      if (res?.ok) {
+        state.myAccounts.data = res;
+        renderMyAccounts();
+        toast("Skipped video — next candidate promoted to Top 10");
+      }
+    });
+  });
+}
+
+function renderAccountsOwnPostsTab(data) {
+  const emptyEl = document.getElementById("accOwnEmptyCallout");
+  const gridEl = document.getElementById("accOwnMediaGrid");
+  const counterEl = document.getElementById("accOwnCounter");
+  const acc = data.account;
+  let posts = [...(data.ownPosts || [])];
+
+  if (!posts.length) {
+    emptyEl.hidden = false;
+    document.getElementById("accOwnEmptyDesc").textContent = `@${acc.username} has not been scanned from Instagram yet (${
+      (data.localReels || []).length
+    } local reels exist in Reels/). Click below to fetch your live Instagram Reels & performance metrics.`;
+    gridEl.innerHTML = "";
+    counterEl.textContent = "0 published posts";
+    return;
+  }
+
+  emptyEl.hidden = true;
+  const sortBy = state.myAccounts.ownSort || "outlier";
+  if (sortBy === "commentRate") {
+    posts.sort((a, b) => (b.commentRate || 0) - (a.commentRate || 0));
+  } else {
+    posts = sortPostsClient(posts, sortBy);
+  }
+  counterEl.textContent = `${posts.length} published IG posts`;
+  gridEl.innerHTML = buildMediaGridHtml(posts);
+  wireGridEvents(gridEl, posts);
+}
+
+function renderAccountsReproTab(data) {
+  const listEl = document.getElementById("accReproList");
+  const counterEl = document.getElementById("accReproCounter");
+  const filter = state.myAccounts.reproFilter || "all";
+  let rows = [...(data.reproducedComparisons || [])];
+  if (filter !== "all") {
+    rows = rows.filter((r) => r.status === filter);
+  }
+  counterEl.textContent = `${rows.length} comparisons`;
+
+  if (!rows.length) {
+    listEl.innerHTML = `<div class="empty-stage"><h2>No Matched Comparisons Yet</h2><p>Sync @${esc(
+      data.account.username
+    )} from Instagram to compare your published Reels side by side against competitor outliers.</p></div>`;
+    return;
+  }
+
+  listEl.innerHTML = rows
+    .map((r) => {
+      const isLive = r.status === "published_on_ig";
+      const own = r.ownPost;
+      const lr = r.localReel;
+      const comp = r.competitorPost;
+      const ratioBadge =
+        r.viewsRatio != null
+          ? `<span class="mini-tag ${r.viewsRatio >= 0.5 ? "is-fresh-tag" : ""}">Perf vs Original: ${(r.viewsRatio * 100).toFixed(0)}%</span>`
+          : "";
+
+      return `
+      <article class="comparison-row">
+        <div class="comparison-status-col">
+          <span class="mini-tag ${isLive ? "is-fresh-tag" : "is-warn-tag"}">${
+            isLive ? "✓ Published on IG" : "📁 Local Reels/ Only"
+          }</span>
+          ${ratioBadge}
+        </div>
+        <div class="comparison-side">
+          <span class="section-eyebrow">Your Version (${isLive ? "@" + esc(data.account.username) : "Local Prod"})</span>
+          ${
+            own
+              ? `<strong>${esc((own.caption || lr?.hook || own.code || "").slice(0, 110))}</strong>
+                 <div class="comparison-metrics">
+                   <span>${own.outlierScore != null ? own.outlierScore.toFixed(1) + "x" : "—"}</span>
+                   <span>▶ ${fmtCompact(own.views)}</span>
+                   <span>💬 ${fmtCompact(own.comments)}</span>
+                 </div>`
+              : lr
+              ? `<strong>#${esc(lr.reelNumber)} · ${esc(lr.slug)}</strong>
+                 <div class="comparison-metrics">
+                   <span>Keyword: ${esc(lr.keyword || "—")}</span>
+                   <span>Product: ${esc(lr.product || "—")}</span>
+                 </div>`
+              : `<span class="empty-hint">No local match</span>`
+          }
+        </div>
+        <div class="comparison-side">
+          <span class="section-eyebrow">Niche Original ${comp ? `(@${esc(comp.username)})` : ""}</span>
+          ${
+            comp
+              ? `<strong>${esc((comp.spokenHook || comp.caption || comp.code || "").slice(0, 110))}</strong>
+                 <div class="comparison-metrics">
+                   <span>${comp.outlierScore != null ? comp.outlierScore.toFixed(1) + "x" : "—"}</span>
+                   <span>▶ ${fmtCompact(comp.views)}</span>
+                   <span>⚡ ${comp.viewsPerHour != null ? fmtCompact(comp.viewsPerHour) + "/h" : "—"}</span>
+                   <a href="${esc(comp.url || `https://www.instagram.com/reel/${comp.code}/`)}" target="_blank" rel="noopener noreferrer">Open ↗</a>
+                 </div>`
+              : `<span class="empty-hint">Original post (no competitor match in DB)</span>`
+          }
+        </div>
+      </article>
+      `;
+    })
+    .join("");
+}
+
+function renderAccountsCompetitorsTab(data) {
+  const grid = document.getElementById("accCompetitorsGrid");
+  if (!grid) return;
+  const list = data.competitorStatusList || [];
+  grid.innerHTML = list
+    .map(
+      (c) => `
+      <div class="comp-watch-card">
+        <div class="comp-watch-head">
+          <strong>@${esc(c.username)}</strong>
+          <button type="button" class="btn-ghost-xs" data-remove-comp="${esc(c.username)}" title="Remove competitor">✕</button>
+        </div>
+        <div class="comp-watch-stats">
+          <span>${c.postsCount} posts in DB</span>
+          <span>${c.peakOutlier != null ? `Peak ${c.peakOutlier}x` : "Not scanned yet"}</span>
+        </div>
+        <div class="comp-watch-foot">
+          <span class="empty-hint">${c.lastScrapedAt ? `Updated ${fmtRelativeAge(c.lastScrapedAt)}` : "Never scraped"}</span>
+          <button type="button" class="btn-secondary btn-sm" data-scan-comp="${esc(c.username)}">Scan Now</button>
+        </div>
+      </div>
+    `
+    )
+    .join("");
+
+  grid.querySelectorAll("[data-remove-comp]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const res = await apiPost("/api/my-accounts/config", {
+        action: "removeCompetitor",
+        accountId: data.account.id,
+        competitor: btn.dataset.removeComp,
+      });
+      if (res?.ok) {
+        state.myAccounts.data = res;
+        renderMyAccounts();
+      }
+    });
+  });
+
+  grid.querySelectorAll("[data-scan-comp]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const handle = btn.dataset.scanComp;
+      setBanner(true, `Scanning competitor @${handle}…`);
+      btn.disabled = true;
+      try {
+        const res = await apiPost("/api/my-accounts/sync", {
+          accountId: data.account.id,
+          onlyHandles: [handle],
+          depthCompetitors: 40,
+        });
+        if (res?.ok && res.data) {
+          state.myAccounts.data = res.data;
+          renderMyAccounts();
+          toast(`@${handle} synced to My Accounts`);
+        } else {
+          toast(res?.message || `Failed to sync @${handle}`);
+        }
+      } finally {
+        setBanner(false);
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+function initMyAccountsView() {
+  document.querySelectorAll("#accountsSubTabSeg .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.myAccounts.subTab = btn.dataset.acctab;
+      renderMyAccounts();
+    });
+  });
+
+  document.querySelectorAll("#accCtaFilterSeg .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#accCtaFilterSeg .seg-btn").forEach((b) => b.classList.remove("is-active"));
+      btn.classList.add("is-active");
+      state.myAccounts.ctaFilter = btn.dataset.cta;
+      if (state.myAccounts.data) renderAccountsPriorityTab(state.myAccounts.data);
+    });
+  });
+
+  document.getElementById("accExcludeLocalCheck")?.addEventListener("change", (ev) => {
+    state.myAccounts.excludeLocalDrafts = ev.currentTarget.checked;
+    loadMyAccounts();
+  });
+
+  document.querySelectorAll("#accOwnSortSeg .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#accOwnSortSeg .seg-btn").forEach((b) => b.classList.remove("is-active"));
+      btn.classList.add("is-active");
+      state.myAccounts.ownSort = btn.dataset.sort;
+      if (state.myAccounts.data) renderAccountsOwnPostsTab(state.myAccounts.data);
+    });
+  });
+
+  document.querySelectorAll("#accReproFilterSeg .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#accReproFilterSeg .seg-btn").forEach((b) => b.classList.remove("is-active"));
+      btn.classList.add("is-active");
+      state.myAccounts.reproFilter = btn.dataset.repro;
+      if (state.myAccounts.data) renderAccountsReproTab(state.myAccounts.data);
+    });
+  });
+
+  const runSync = async (scope, btn, onlyHandles = null) => {
+    if (btn) btn.disabled = true;
+    setBanner(true, scope === "own" ? "Syncing your Instagram account…" : "Running full Cron sync (Your account + Competitors)…");
+    try {
+      const res = await apiPost("/api/my-accounts/sync", {
+        accountId: state.myAccounts.activeAccountId,
+        scope,
+        onlyHandles,
+      });
+      if (res?.ok && res.data) {
+        state.myAccounts.data = res.data;
+        renderMyAccounts();
+        toast("My Accounts synced successfully!");
+      } else {
+        toast(res?.message || "Sync failed (check Chrome connection)");
+      }
+    } finally {
+      setBanner(false);
+      if (btn) btn.disabled = false;
+    }
+  };
+
+  document.getElementById("syncOwnAccountBtn")?.addEventListener("click", (ev) => runSync("own", ev.currentTarget));
+  document.getElementById("accOwnScanNowBtn")?.addEventListener("click", (ev) => runSync("own", ev.currentTarget));
+  document.getElementById("syncAllCronBtn")?.addEventListener("click", (ev) => runSync("all", ev.currentTarget));
+
+  document.getElementById("cronIntervalSelect")?.addEventListener("change", async (ev) => {
+    const val = Number(ev.currentTarget.value);
+    const res = await apiPost("/api/my-accounts/config", {
+      action: "updateCron",
+      enabled: val > 0,
+      intervalHours: val > 0 ? val : 6,
+    });
+    if (res?.ok) {
+      state.myAccounts.data = res;
+      renderMyAccounts();
+      toast(val > 0 ? `Auto-Cron set to every ${val}h` : "Auto-Cron paused");
+    }
+  });
+
+  document.getElementById("addMyAccountBtn")?.addEventListener("click", async () => {
+    const username = window.prompt("Instagram @handle of your account:");
+    if (!username || !username.trim()) return;
+    const category = window.prompt("Niche category (e.g. Pets, Health, Fitness):", "Pets") || "Pets";
+    const competitors = window.prompt("Competitor @handles (comma separated):", "") || "";
+    const res = await apiPost("/api/my-accounts/config", {
+      action: "addAccount",
+      username: username.trim(),
+      category: category.trim(),
+      competitors,
+    });
+    if (res?.ok) {
+      state.myAccounts.data = res;
+      state.myAccounts.activeAccountId = res.activeAccountId;
+      renderMyAccounts();
+      toast(`Added @${username.replace(/^@/, "")}`);
+    }
+  });
+
+  document.getElementById("accAddCompetitorBtn")?.addEventListener("click", async () => {
+    const inp = document.getElementById("accAddCompetitorInput");
+    if (!inp || !inp.value.trim()) return;
+    const res = await apiPost("/api/my-accounts/config", {
+      action: "addCompetitor",
+      accountId: state.myAccounts.activeAccountId,
+      competitor: inp.value.trim(),
+    });
+    if (res?.ok) {
+      inp.value = "";
+      state.myAccounts.data = res;
+      renderMyAccounts();
+      toast("Added competitor(s) to watchlist");
+    }
+  });
+
+  document.getElementById("accScanMissingCompsBtn")?.addEventListener("click", async (ev) => {
+    const list = state.myAccounts.data?.competitorStatusList || [];
+    const missing = list.filter((c) => c.needsFirstScan).map((c) => c.username);
+    if (!missing.length) {
+      toast("All tracked competitors already have posts in DB!");
+      return;
+    }
+    await runSync("competitors", ev.currentTarget, missing);
+  });
+}
+
 // ── Boot ────────────────────────────────────────────────────────────────────
 
 initTheme();
 initNavigation();
 syncSurfaceDropdown();
+initMyAccountsView();
 initCreatorSpy();
 initNicheRadar();
 initVideoDbView();

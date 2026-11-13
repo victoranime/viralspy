@@ -56,6 +56,7 @@ const RADAR_HISTORY_FILE = path.join(DATA_DIR, "radar_history.json");
 const POSTS_DB_FILE = path.join(DATA_DIR, "posts_db.json");
 const REPRODUCE_DB_FILE = path.join(DATA_DIR, "reproduce_db.json");
 const CATEGORIES_FILE = path.join(DATA_DIR, "categories.json");
+const MY_ACCOUNTS_FILE = path.join(DATA_DIR, "my_accounts.json");
 const OCR_SWIFT_SRC = path.join(__dirname, "ocr_vision.swift");
 const OCR_BIN_PATH = path.join(DATA_DIR, "ocr_vision_bin");
 
@@ -2854,6 +2855,1003 @@ async function runNicheRadar({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// My Accounts Hub, Reproduction Matcher, Top-10 Priority, Smart CTA & 6h Cron
+// ─────────────────────────────────────────────────────────────────────────────
+
+function createDefaultMyAccountsStore() {
+  const nowIso = new Date().toISOString();
+  const nextIso = new Date(Date.now() + 6 * 3600 * 1000).toISOString();
+  return {
+    activeAccountId: "pets_wade",
+    accounts: [
+      {
+        id: "pets_wade",
+        username: "k9americandog",
+        aliases: ["k9wade"],
+        displayName: "Wade Richter · @k9americandog",
+        platform: "instagram",
+        category: "Pets",
+        localReelsDir: "/Users/victor/Work/AI AVATAR/Wade/Reels",
+        localDescriptionsFile: "/Users/victor/Work/AI AVATAR/Wade/scripts/descriptions.py",
+        competitors: [
+          "farmerpaws",
+          "furever_healthy",
+          "the.pittie.rescue.dad",
+          "lisa.goldengirl85",
+          "marcu.sk9",
+          "100pitties",
+          "amos.beilerr",
+          "happypuphacks",
+          "sarge.and.the.squad",
+          "miamidogdaddy",
+        ],
+        createdAt: nowIso,
+      },
+      {
+        id: "health_odessa",
+        username: "odessa.ageless",
+        aliases: ["thebluezonetherapy"],
+        displayName: "Odessa Whitfield · @odessa.ageless",
+        platform: "instagram",
+        category: "Health",
+        localReelsDir: "/Users/victor/Work/AI AVATAR/Odessa/Reels",
+        localDescriptionsFile: null,
+        competitors: [
+          "liangsvitality",
+          "askoliviahealth",
+          "wellnesseverydayhealth",
+          "susan.healthy",
+          "health.is.forever",
+          "health.is.strength",
+          "rooted.health.tips",
+          "muscle40plus_",
+          "mark.healthyliving",
+        ],
+        createdAt: nowIso,
+      },
+    ],
+    manualReproduced: {},
+    cron: {
+      enabled: true,
+      intervalHours: 6,
+      ownDepth: 60,
+      competitorDepth: 30,
+      running: false,
+      lastRunAt: null,
+      nextRunAt: nextIso,
+      lastSummary: null,
+      lastError: null,
+    },
+  };
+}
+
+const myAccountsStore = (() => {
+  const def = createDefaultMyAccountsStore();
+  const loaded = loadJsonSync(MY_ACCOUNTS_FILE, null);
+  if (!loaded || !Array.isArray(loaded.accounts) || !loaded.accounts.length) {
+    return def;
+  }
+  return {
+    activeAccountId: loaded.activeAccountId || def.activeAccountId,
+    accounts: loaded.accounts,
+    manualReproduced:
+      loaded.manualReproduced && typeof loaded.manualReproduced === "object"
+        ? loaded.manualReproduced
+        : {},
+    cron: {
+      ...def.cron,
+      ...(loaded.cron || {}),
+      running: false,
+    },
+  };
+})();
+
+const MY_ACCOUNTS_STOPWORDS = new Set([
+  "about", "after", "again", "against", "almost", "already", "also", "always",
+  "americandogs", "among", "another", "around", "because", "before", "being",
+  "between", "both", "could", "comment", "comments", "daily", "didn", "doesn",
+  "doing", "dog", "dogs", "dogsofusa", "dogtraining", "dont", "down", "during",
+  "each", "else", "even", "ever", "every", "everything", "first", "follow",
+  "followed", "following", "food", "from", "germanshepherdsofinstagram", "give",
+  "gives", "going", "good", "great", "habit", "habits", "happens", "have",
+  "health", "healthy", "help", "helps", "here", "into", "just", "keep", "keeps",
+  "know", "last", "later", "learn", "least", "like", "little", "live", "long",
+  "longer", "look", "make", "makes", "many", "message", "messages", "might",
+  "mine", "more", "morning", "most", "much", "must", "need", "never", "next",
+  "night", "none", "only", "other", "over", "owner", "owners", "part", "people",
+  "pet", "pets", "puppies", "puppy", "pupganicspartner", "quick", "really",
+  "recipe", "recipes", "rescue", "rescuedogsofamerica", "right", "routine",
+  "routines", "said", "same", "save", "send", "shelf", "shelter", "should",
+  "showing", "shows", "signing", "simple", "simplepupganics", "since", "some",
+  "something", "start", "starts", "stay", "still", "stop", "story", "strong",
+  "such", "sure", "syntheticperformer", "take", "takes", "tell", "than", "that",
+  "their", "them", "then", "there", "these", "they", "thing", "things", "think",
+  "this", "those", "three", "time", "today", "together", "told", "took",
+  "under", "until", "used", "using", "very", "video", "videos", "want", "wants",
+  "watch", "week", "weeks", "well", "were", "what", "when", "where", "which",
+  "while", "with", "without", "would", "year", "years", "your", "youre",
+]);
+
+function tokenizeTopicText(text) {
+  const clean = String(text || "")
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/#[a-z0-9_]+/g, " ")
+    .replace(/@[a-z0-9_.]+/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ");
+  const tokens = new Set();
+  for (const raw of clean.split(/\s+/)) {
+    if (!raw || raw.length < 3 || /^\d+$/.test(raw)) continue;
+    const stemmed = raw.endsWith("ies") && raw.length > 5
+      ? raw.slice(0, -3) + "y"
+      : raw.endsWith("s") && raw.length > 4 && !raw.endsWith("ss")
+      ? raw.slice(0, -1)
+      : raw;
+    if (MY_ACCOUNTS_STOPWORDS.has(raw) || MY_ACCOUNTS_STOPWORDS.has(stemmed)) continue;
+    tokens.add(stemmed);
+  }
+  return tokens;
+}
+
+function getPostTopicCorpus(post) {
+  const code = post?.shortcode || post?.code || "";
+  const tr = code ? transcriptCache[code] : null;
+  const vh = code ? visualHooksCache[code] : null;
+  const pack = code ? findPackForCode(code) : null;
+  return [
+    post?.caption || "",
+    post?.spokenHook || "",
+    post?.onScreenHook || "",
+    tr?.hook || "",
+    tr?.transcription || "",
+    vh?.onScreenHookText || "",
+    pack?.spokenHook || "",
+    pack?.onScreenHook || "",
+    pack?.transcript || "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+function computeTopicSimilarity(tokensA, tokensB) {
+  if (!tokensA || !tokensB || tokensA.size < 2 || tokensB.size < 2) return 0;
+  let inter = 0;
+  for (const t of tokensA) {
+    if (tokensB.has(t)) inter += 1;
+  }
+  if (inter < 2) return 0;
+  const dice = (2 * inter) / (tokensA.size + tokensB.size);
+  const containment = inter / Math.min(tokensA.size, tokensB.size);
+  return Number((dice * 0.55 + containment * 0.45).toFixed(3));
+}
+
+function parseDescriptionsPyMap(filePath) {
+  const map = {};
+  if (!filePath || !fs.existsSync(filePath)) return map;
+  try {
+    const src = fs.readFileSync(filePath, "utf8");
+    const blockMatch = src.match(/REELS\s*=\s*\{([\s\S]*?)\n\}/);
+    if (!blockMatch) return map;
+    const entryRe = /"(\d{2})":\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*,\s*"((?:[^"\\]|\\.)*)"/g;
+    let m;
+    while ((m = entryRe.exec(blockMatch[1])) !== null) {
+      map[m[1]] = {
+        keyword: m[2],
+        product: m[3],
+        ctaLine: m[4].replace(/\\"/g, '"'),
+        hookLine: m[5].replace(/\\"/g, '"'),
+      };
+    }
+  } catch (_) {}
+  return map;
+}
+
+function scanLocalAvatarReels(account) {
+  const dir = account?.localReelsDir;
+  if (!dir || !fs.existsSync(dir)) return [];
+  const descMap = parseDescriptionsPyMap(account.localDescriptionsFile);
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir).filter((d) => /^\d{2}_/.test(d)).sort();
+  } catch (_) {
+    return [];
+  }
+
+  const out = [];
+  for (const folderName of entries) {
+    const num = folderName.slice(0, 2);
+    const slug = folderName.slice(3).replace(/-/g, " ");
+    const fullDir = path.join(dir, folderName);
+    let combinedText = "";
+    let keyword = descMap[num]?.keyword || "";
+    let product = descMap[num]?.product || "";
+    let hook = descMap[num]?.hookLine || "";
+
+    for (const fname of ["notes.md", "description.md", "script.txt"]) {
+      const fpath = path.join(fullDir, fname);
+      if (fs.existsSync(fpath)) {
+        try {
+          const txt = fs.readFileSync(fpath, "utf8");
+          combinedText += "\n" + txt;
+          if (!keyword) {
+            const kwMatch = txt.match(/Mot-clé\s+\*\*([A-Z0-9_]+)\*\*|Mot-clé CTA[^`]*`([A-Z0-9_]+)`|Comment\s+"?([A-Z0-9_]{3,16})"?/);
+            if (kwMatch) keyword = kwMatch[1] || kwMatch[2] || kwMatch[3] || "";
+          }
+          if (!product) {
+            const prodMatch = txt.match(/produit\s+\*\*([^*]+)\*\*/i);
+            if (prodMatch) product = prodMatch[1].trim();
+          }
+          if (!hook && fname === "notes.md") {
+            const s1Match = txt.match(/\*\*S1[^:]*\*\*\s*:\s*"([^"]+)"/);
+            if (s1Match) hook = s1Match[1].trim();
+          }
+        } catch (_) {}
+      }
+    }
+
+    const codeSet = new Set();
+    for (const m of combinedText.matchAll(/(?:reel\/|p\/|ig_)([A-Za-z0-9_-]{8,14})/g)) {
+      codeSet.add(m[1]);
+    }
+    // Filter out own published shortcodes if any, keeping competitor source refs
+    const sourceShortcodes = Array.from(codeSet);
+    const topicText = `${slug} ${hook} ${combinedText.slice(0, 1400)}`;
+    const tokens = tokenizeTopicText(topicText);
+
+    out.push({
+      reelNumber: num,
+      folderName,
+      slug,
+      keyword: keyword || null,
+      product: product || null,
+      hook: hook || slug,
+      sourceShortcodes,
+      tokens,
+    });
+  }
+  return out;
+}
+
+function getAllHandlesForAccount(account) {
+  const handles = new Set();
+  if (account?.username) handles.add(String(account.username).replace(/^@/, "").toLowerCase());
+  for (const a of account?.aliases || []) {
+    if (a) handles.add(String(a).replace(/^@/, "").toLowerCase());
+  }
+  return handles;
+}
+
+function enrichPostRowForAccounts(entry) {
+  const code = entry.shortcode || entry.code || "";
+  const pack = findPackForCode(code);
+  const tr = code ? transcriptCache[code] : null;
+  const vh = code ? visualHooksCache[code] : null;
+  const localThumb = pack ? `/api/reproduce/asset/${pack.packId}/thumbnail.jpg` : null;
+  const views = entry.views ?? null;
+  const comments = entry.comments ?? null;
+  const commentRate = views && views > 0 && comments != null ? Number(((comments / views) * 100).toFixed(2)) : null;
+  return {
+    ...entry,
+    code,
+    shortcode: code,
+    category: entry.category || inferCategory(entry),
+    caption: entry.caption || pack?.caption || "",
+    spokenHook: tr?.hook || pack?.spokenHook || "",
+    onScreenHook: vh?.onScreenHookText || pack?.onScreenHook || "",
+    hasTranscript: !!(tr?.transcription || pack?.transcript),
+    transcriptPreview: (tr?.transcription || pack?.transcript || "").slice(0, 260),
+    commentRate,
+    thumbnailUrl: localThumb || entry.thumbnailUrl || null,
+    isSaved: isCodeSaved(code),
+    reproducePackId: pack ? pack.packId : null,
+    reproduceZipUrl: pack ? pack.zipUrl : null,
+  };
+}
+
+function buildCtaRecommendation(post, account) {
+  const corpus = getPostTopicCorpus(post);
+  const isHealth = String(account?.category || "").toLowerCase() === "health" || account?.id === "health_odessa";
+
+  if (isHealth) {
+    const isRecipe = /\b(lentil|chickpea|chia|flax|potato|avocado|beet|bake|oven|blender|simmer|boil|mash|flour|wraps?|bread|mousse|cake|recipe)\b/i.test(corpus);
+    const isMetabolic = /\b(sugar|glucose|insulin|carb|craving|weight|metabolism|fasting|berberine|a1c)\b/i.test(corpus);
+    const kw = isRecipe ? "RECIPE" : isMetabolic ? "BALANCE" : "GUT";
+    let recommendedCtaType = "manychat_value";
+    let whyAngle = "High-save health/recipe format: deliver pure recipe value in ManyChat first, then qualify for Physician's Choice.";
+    if (isMetabolic) {
+      recommendedCtaType = "rootation";
+      whyAngle = "Blood-sugar & cravings topic matches Rootation Berberine Gummies.";
+    } else if (!isRecipe && /\b(gut|bloat|digestion|constipation|stool|probiotic|enzyme|stomach)\b/i.test(corpus)) {
+      recommendedCtaType = "pc_growth_dm";
+      whyAngle = "Gut & digestion topic maps straight to Physician's Choice Growth DM (no product shown in video, 35% commission).";
+    }
+
+    const variants = {
+      manychat_value: {
+        key: "manychat_value",
+        label: "ManyChat Value",
+        productName: isRecipe ? "Step-by-Step Recipe + Routine" : "Loma Linda Daily Gut Routine",
+        keyword: isRecipe ? "RECIPE" : "HABITS",
+        why: "Pure value DM builds high comment velocity & follower conversions before soft Setter follow-up.",
+        transitionLine: isRecipe
+          ? "It takes just a few pantry ingredients and leaves your stomach feeling light instead of weighed down."
+          : "Your digestion doesn't need extreme restriction at our age, just a steady daily rhythm.",
+        ctaLine: isRecipe
+          ? `Comment RECIPE and I'll send the exact step-by-step measurements to your messages. Follow me first so it goes through. Stay strong, stay golden.`
+          : `Comment HABITS and I'll send my morning routine straight to your messages. Follow me first so it reaches you. Stay strong, stay golden.`,
+      },
+      pc_growth_dm: {
+        key: "pc_growth_dm",
+        label: "PC Growth DM (35%)",
+        productName: "Physician's Choice Growth DM Link",
+        keyword: kw === "RECIPE" ? "SECRET" : kw,
+        why: "Growth DM keeps the video 100% educational (no bottle shown) and drops the tracked link inside DMs.",
+        transitionLine: "Real food lays the foundation, and supporting your gut lining every morning is what makes the difference stick.",
+        ctaLine: `Comment ${kw === "RECIPE" ? "SECRET" : kw} and I'll send you the exact gut support I pair with my morning routine. Follow me first so it reaches your messages. Stay strong, stay golden.`,
+      },
+      pc_shop: {
+        key: "pc_shop",
+        label: "PC Shop Voie 1",
+        productName: "Physician's Choice Gut Bundle",
+        keyword: "HELP",
+        why: "Direct Shop CTA for buyer-intent audiences (remember to show bottle >= 3s and use #simplepc only).",
+        transitionLine: "When real food still leaves you sluggish after meals, giving your stomach targeted probiotics and enzymes helps break it down.",
+        ctaLine: `You can get Physician's Choice Advanced Gut Health Bundle on Amazon, or comment HELP and I'll DM you. Stay strong, stay golden.`,
+      },
+      rootation: {
+        key: "rootation",
+        label: "Rootation Berberine",
+        productName: "Rootation Berberine Gummies",
+        keyword: "BALANCE",
+        why: "Strong angle for after-meal energy, cravings, and steady daily balance.",
+        transitionLine: "Pairing whole foods with the right morning support keeps afternoon energy steady without the crash.",
+        ctaLine: `Comment BALANCE and I'll send you the exact daily gummies I keep on my counter. Follow me first so it reaches your messages. Stay strong, stay golden.`,
+      },
+      listicle: {
+        key: "listicle",
+        label: "Listicle / Guide",
+        productName: "Blue Zone Shopping Listicle",
+        keyword: "LIST",
+        why: "Ideal when the post compares 3–7 items or grocery swaps; sends a clean checklist link in DM.",
+        transitionLine: "You don't need twenty expensive bottles to feel strong after sixty, just the right five staples.",
+        ctaLine: `Comment LIST and I'll send my complete Loma Linda grocery and supplement checklist to your messages. Stay strong, stay golden.`,
+      },
+    };
+    return {
+      recommendedCtaType,
+      whyAngle,
+      ...variants[recommendedCtaType],
+      variants,
+    };
+  }
+
+  // Pets (@k9americandog — Wade Richter)
+  const isWetToothbrush = /\btoothbrush\b/i.test(corpus) && /\b(mother|mama|calm|stroke|anxious)\b/i.test(corpus);
+  const isDental = !isWetToothbrush && /\b(breath|teeth|tooth|tartar|plaque|gum|gums|gumline|dental|fish\s*breath|bad\s*breath|stinky\s*mouth)\b/i.test(corpus);
+  const isDashFood = /\b(kibble|dry\s*food|commercial\s*dog|ultra.?processed|fresh\s*food|human\s*grade|table\s*grade|raw\s*food|picky\s*eater|recall|real\s*meat)\b/i.test(corpus);
+  const isListicle = /\b([3-9]|10)\s+(things|foods|mistakes|hacks|signs|habits|secrets|products|supplements)\b/i.test(corpus) || /\b(walmart|petco|petsmart|aisle|stop\s*buying)\b/i.test(corpus);
+  const isRecipe = /\b(bake|oven|blender|simmer|boil|mash|flour|oats|peanut\s*butter|pumpkin|sweet\s*potato|bone\s*broth|broccoli|carrot|liver|treats?|recipe)\b/i.test(corpus);
+  const isBondingOrBehavior = /\b(bed|heart\s*breaks|circle\s*before|sniff|ear\s*massage|wet\s*toothbrush|calm|anxious|anxiety|fireworks|storm|barking|yell|leash|potty|chosen|god|goodbye|forget)\b/i.test(corpus);
+
+  // Pick specific Wade Zernio keyword matching topic
+  let mvKeyword = "CHEW";
+  if (/\b(paw|paws|licking|pads|toes|epsom|rusty)\b/i.test(corpus)) mvKeyword = "PAWS";
+  else if (/\b(ear|ears|gunk|wax|scratching\s*ear)\b/i.test(corpus)) mvKeyword = "EARS";
+  else if (/\b(gut|gas|fart|stomach|foam|vomit|diarrhea|poop|stool|pumpkin)\b/i.test(corpus)) mvKeyword = "GUT";
+  else if (/\b(coat|shedding|itch|itchy|skin|flaky|dandruff|shiny)\b/i.test(corpus)) mvKeyword = "COAT";
+  else if (/\b(joint|joints|hip|hips|limp|arthritis|stiff|stairs|sit\s*like)\b/i.test(corpus)) mvKeyword = "JOINTS";
+
+  let valueKeyword = "HABITS";
+  if (isRecipe) valueKeyword = "RECIPE";
+  else if (isWetToothbrush) valueKeyword = "BRUSH";
+  else if (/\bsniff\b/i.test(corpus)) valueKeyword = "SNIFF";
+  else if (/\b(bark|barking|yell)\b/i.test(corpus)) valueKeyword = "QUIET";
+  else if (/\b(potty|pee|crate|house\s*train)\b/i.test(corpus)) valueKeyword = "POTTY";
+  else if (/\b(calm|anxious|panic|thumb|firework|thunder|alone)\b/i.test(corpus)) valueKeyword = "CALM";
+
+  let recommendedCtaType = "multivitamin";
+  let whyAngle = corpus
+    ? "Internal wellness / longevity / symptom video: bridges naturally to Pupganics Daily Soft Chews to cover the gaps in his bowl."
+    : "Caption/transcript not yet fetched: default high-converting Multivitamin soft chew angle (click Reproduce .zip to lock exact topic).";
+
+  if (isDental) {
+    recommendedCtaType = "dental";
+    whyAngle = "Oral hygiene / bad breath / tartar hook -> highest conversion on Pupganics ProSmile Dental Powder (BREATH).";
+  } else if (isDashFood && !isListicle) {
+    recommendedCtaType = "dash";
+    whyAngle = "Kibble critique / fresh nutrition angle -> ideal bridge to DASH gently cooked fresh dog food (-50% custom box).";
+  } else if (isListicle && !isDental) {
+    recommendedCtaType = "listicle";
+    whyAngle = "Multi-item / store-aisle format -> send Wade's comparison Listicle so viewers see every approved pick in one page.";
+  } else if (isRecipe) {
+    recommendedCtaType = "manychat_value";
+    whyAngle = "True homemade recipe -> deliver real kitchen value with RECIPE first, then qualify dog's age in Zernio Setter.";
+  } else if (isBondingOrBehavior && !/\b(paw|ear|gut|coat|joint|allerg|shed)\b/i.test(corpus)) {
+    recommendedCtaType = "manychat_value";
+    whyAngle = `High-share emotional/behavior/care hook -> don't hard-pitch; use ManyChat value (${valueKeyword}) to maximize shares & Setter DMs.`;
+  } else if (mvKeyword !== "CHEW") {
+    recommendedCtaType = "multivitamin";
+    whyAngle = `Targeted symptom (${mvKeyword}) -> wipe/soak only hits the surface, while Pupganics Daily Soft Chews help cover the gaps inside his bowl.`;
+  }
+
+  const variants = {
+    multivitamin: {
+      key: "multivitamin",
+      label: "Multivitamin",
+      productName: "Pupganics Daily Soft Chews",
+      keyword: mvKeyword,
+      funnelType: mvKeyword === "CHEW" ? "chew" : "habits",
+      why: "Covers internal nutritional gaps (gut, skin, coat, hips, allergy/paw licking) with benefit-first storytelling.",
+      transitionLine: "Treating the outside helps for a day, but when this keeps coming back every month, it usually starts inside his bowl.",
+      ctaLine: `Comment ${mvKeyword} and I'll send you the daily chew I give my own dogs at the shelter to help cover the gaps in their bowl. Follow me first so it reaches your messages. Wade, signing out.`,
+    },
+    dental: {
+      key: "dental",
+      label: "Dental Powder",
+      productName: "Pupganics ProSmile Dental Powder",
+      keyword: "BREATH",
+      funnelType: "dental",
+      why: "No-brush, 10-second scoop angle for dog breath, yellow tartar, and gumline hygiene.",
+      transitionLine: "Brushing alone misses what sits under the gumline, and most dental chews are gone in ten seconds flat.",
+      ctaLine: "Comment BREATH and I'll send you the exact dental powder I scoop into my dogs' food every morning. Follow me first so it reaches your messages. Wade, signing out.",
+    },
+    dash: {
+      key: "dash",
+      label: "Dash Dog Food",
+      productName: "DASH Fresh Dog Food (-50% Box)",
+      keyword: "DASH",
+      funnelType: "dash",
+      why: "Best for kibble comparisons, longevity nutrition, picky eaters, and cooked vs ultra-processed food.",
+      transitionLine: "Most store kibble gets cooked so hot the real nutrition is cooked right out of it before it ever hits his bowl.",
+      ctaLine: "If you don't have time to cook fresh meals every night, comment DASH and I'll send you the real-food plan I trust with 50% off your dog's first box. Follow me first so it reaches your messages. Wade, signing out.",
+    },
+    listicle: {
+      key: "listicle",
+      label: "Listicle Page",
+      productName: "Wade's Shelter Top-Picks Listicle",
+      keyword: "LIST",
+      funnelType: "habits",
+      why: "Best when a video lists 3–7 fixes, store swaps, or multiple symptoms — sends a presell listicle comparing Multivitamin, Dental Powder & DASH.",
+      transitionLine: "You don't need a whole cart of pricey pet-store bottles when the right two or three daily basics do the heavy lifting.",
+      ctaLine: "Comment LIST and I'll send you my full shelter checklist with the exact toppers, dental scoop, and daily chews I actually use. Follow me first so it reaches your messages. Wade, signing out.",
+    },
+    manychat_value: {
+      key: "manychat_value",
+      label: "ManyChat Value",
+      productName: valueKeyword === "RECIPE" ? "3 Homemade Bowl Recipes (Growth DM)" : "7 Daily Shelter Habits (Growth DM)",
+      keyword: valueKeyword,
+      funnelType: valueKeyword === "RECIPE" ? "recipes" : "habits",
+      why: valueKeyword === "RECIPE"
+        ? "RECIPE rule respected: pure homemade recipe video sends real recipe + triggers Zernio age-qualification Setter."
+        : `No hard pitch on viral growth hooks: sends ${valueKeyword} value guide via ManyChat/Zernio so viewers comment, save & enter DM funnel.`,
+      transitionLine: valueKeyword === "RECIPE"
+        ? "It takes ten minutes in your own kitchen and gives your dog real nutrients you can actually pronounce."
+        : "Small daily routines like this build real calm and add healthier years without spending a fortune.",
+      ctaLine: valueKeyword === "RECIPE"
+        ? "Comment RECIPE and I'll send you the exact measurements plus the three bowl toppers I rotate every week. Follow me first so it reaches your messages. Wade, signing out."
+        : `Comment ${valueKeyword} and I'll send you the daily routine we use at my shelter to keep our dogs calm and healthy. Follow me first so it reaches your messages. Wade, signing out.`,
+    },
+  };
+
+  return {
+    recommendedCtaType,
+    whyAngle,
+    ...variants[recommendedCtaType],
+    variants,
+  };
+}
+
+function analyzeAccountData(account, options = {}) {
+  const handles = getAllHandlesForAccount(account);
+  const compSet = new Set((account.competitors || []).map((c) => String(c || "").replace(/^@/, "").toLowerCase()));
+  const localReels = scanLocalAvatarReels(account);
+
+  const allEnriched = Object.values(postsDb)
+    .filter((p) => (p.platform || "instagram") === (account.platform || "instagram"))
+    .map(enrichPostRowForAccounts);
+
+  const ownPosts = [];
+  const competitorPosts = [];
+
+  for (const p of allEnriched) {
+    const u = String(p.username || "").replace(/^@/, "").toLowerCase();
+    if (handles.has(u)) {
+      ownPosts.push(p);
+    } else if (compSet.has(u) || (!u && (p.category || "").toLowerCase() === (account.category || "").toLowerCase())) {
+      competitorPosts.push(p);
+    }
+  }
+
+  ownPosts.sort((a, b) => ((b.outlierScore ?? b.views) || 0) - ((a.outlierScore ?? a.views) || 0));
+
+  // Build token sets
+  const ownTokenMap = new Map();
+  for (const op of ownPosts) {
+    ownTokenMap.set(op.code, tokenizeTopicText(getPostTopicCorpus(op)));
+  }
+  const compTokenMap = new Map();
+  const primaryTokenFreq = new Map();
+  for (const cp of competitorPosts) {
+    const toks = tokenizeTopicText(getPostTopicCorpus(cp));
+    compTokenMap.set(cp.code, toks);
+    if ((cp.outlierScore || 0) >= 2.0) {
+      for (const t of toks) {
+        if (!primaryTokenFreq.has(t)) primaryTokenFreq.set(t, new Set());
+        primaryTokenFreq.get(t).add((cp.username || "").toLowerCase());
+      }
+    }
+  }
+
+  // Match each localReel to ownPosts (is it actually published on @k9americandog?)
+  const localMatchToOwn = new Map();
+  for (const lr of localReels) {
+    let bestOwn = null;
+    let bestSim = 0;
+    for (const op of ownPosts) {
+      const sim = computeTopicSimilarity(lr.tokens, ownTokenMap.get(op.code));
+      if (sim >= 0.34 && sim > bestSim) {
+        bestSim = sim;
+        bestOwn = op;
+      }
+    }
+    if (bestOwn) localMatchToOwn.set(lr.folderName, { ownPost: bestOwn, similarity: bestSim });
+  }
+
+  const localBySourceCode = new Map();
+  for (const lr of localReels) {
+    for (const sc of lr.sourceShortcodes) {
+      localBySourceCode.set(sc, lr);
+    }
+  }
+
+  const manualMap = myAccountsStore.manualReproduced || {};
+  const reproducedComparisons = [];
+  const compStatusMap = new Map();
+
+  for (const cp of competitorPosts) {
+    const manual = manualMap[cp.code];
+    if (manual?.status === "ignored") {
+      compStatusMap.set(cp.code, { status: "ignored" });
+      continue;
+    }
+
+    const explicitLocal = localBySourceCode.get(cp.code) || null;
+    let matchedLocal = explicitLocal;
+    let localSim = explicitLocal ? 1.0 : 0;
+
+    if (!matchedLocal && compTokenMap.get(cp.code).size >= 3) {
+      for (const lr of localReels) {
+        const sim = computeTopicSimilarity(compTokenMap.get(cp.code), lr.tokens);
+        if (sim >= 0.4 && sim > localSim) {
+          localSim = sim;
+          matchedLocal = lr;
+        }
+      }
+    }
+
+    let matchedOwn = null;
+    let ownSim = 0;
+    if (manual?.status === "published") {
+      matchedOwn = ownPosts.find((o) => o.code === manual.ownCode) || {
+        code: manual.ownCode || "manual",
+        username: account.username,
+        caption: manual.note || "Marked as published on @" + account.username,
+        manual: true,
+      };
+      ownSim = 1.0;
+    } else {
+      for (const op of ownPosts) {
+        const sim = computeTopicSimilarity(compTokenMap.get(cp.code), ownTokenMap.get(op.code));
+        if (sim >= 0.32 && sim > ownSim) {
+          ownSim = sim;
+          matchedOwn = op;
+        }
+      }
+      if (!matchedOwn && matchedLocal && localMatchToOwn.has(matchedLocal.folderName)) {
+        const bridge = localMatchToOwn.get(matchedLocal.folderName);
+        matchedOwn = bridge.ownPost;
+        ownSim = bridge.similarity;
+      }
+    }
+
+    if (matchedOwn) {
+      const info = {
+        status: "published_on_ig",
+        ownPost: matchedOwn,
+        localReel: matchedLocal,
+        similarity: ownSim,
+      };
+      compStatusMap.set(cp.code, info);
+      reproducedComparisons.push({
+        status: "published_on_ig",
+        similarity: ownSim,
+        ownPost: matchedOwn,
+        localReel: matchedLocal,
+        competitorPost: cp,
+        viewsRatio:
+          matchedOwn.views != null && cp.views > 0
+            ? Number((matchedOwn.views / cp.views).toFixed(2))
+            : null,
+      });
+    } else if (matchedLocal) {
+      const info = {
+        status: "local_draft_only",
+        localReel: matchedLocal,
+        similarity: localSim,
+      };
+      compStatusMap.set(cp.code, info);
+      reproducedComparisons.push({
+        status: "local_draft_only",
+        similarity: localSim,
+        ownPost: null,
+        localReel: matchedLocal,
+        competitorPost: cp,
+        viewsRatio: null,
+      });
+    }
+  }
+
+  // Also include ownPosts that didn't match a competitor post in DB yet (so Victor still sees his reproduced hits compared to niche median/top)
+  const usedOwnCodes = new Set(reproducedComparisons.map((r) => r.ownPost?.code).filter(Boolean));
+  for (const op of ownPosts.slice(0, 20)) {
+    if (usedOwnCodes.has(op.code)) continue;
+    reproducedComparisons.push({
+      status: "published_on_ig",
+      similarity: null,
+      ownPost: op,
+      localReel: localReels.find((lr) => localMatchToOwn.get(lr.folderName)?.ownPost?.code === op.code) || null,
+      competitorPost: null,
+      viewsRatio: null,
+    });
+  }
+
+  reproducedComparisons.sort((a, b) => {
+    const aOrder = a.status === "published_on_ig" ? 0 : 1;
+    const bOrder = b.status === "published_on_ig" ? 0 : 1;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    return (b.competitorPost?.outlierScore || b.ownPost?.outlierScore || 0) - (a.competitorPost?.outlierScore || a.ownPost?.outlierScore || 0);
+  });
+
+  // Top 10 Priority Recommendations
+  const excludeLocalDrafts = Boolean(options.excludeLocalDrafts);
+  const candidates = [];
+
+  for (const cp of competitorPosts) {
+    const st = compStatusMap.get(cp.code);
+    if (st?.status === "published_on_ig" || st?.status === "ignored") continue;
+    if (excludeLocalDrafts && st?.status === "local_draft_only") continue;
+
+    const outScore = cp.outlierScore ?? 1;
+    const outlierPts = Math.min(45, Math.log2(Math.max(1, outScore) + 1) * 10.5);
+
+    const ageDays = cp.ageHours != null ? cp.ageHours / 24 : 60;
+    const velBase = cp.velocityScore != null ? cp.velocityScore : cp.viewsPerHour != null ? cp.viewsPerHour / 250 : 0;
+    const freshnessBoost = ageDays <= 14 ? 8 : ageDays <= 30 ? 4 : 0;
+    const velocityPts = Math.min(25, Math.log2(Math.max(0, velBase) + 1) * 6 + freshnessBoost);
+
+    const toks = compTokenMap.get(cp.code) || new Set();
+    let maxCreatorBreadth = 1;
+    for (const t of toks) {
+      const freq = primaryTokenFreq.get(t)?.size || 1;
+      if (freq > maxCreatorBreadth) maxCreatorBreadth = freq;
+    }
+    const crossCreatorPts = maxCreatorBreadth >= 3 ? 15 : maxCreatorBreadth === 2 ? 8 : 0;
+    const commentRatePts = cp.commentRate != null ? Math.min(15, cp.commentRate * 8) : 0;
+
+    let priorityScore = Number(Math.min(100, outlierPts + velocityPts + crossCreatorPts + commentRatePts).toFixed(1));
+    if (st?.status === "local_draft_only") {
+      // Slightly deprioritize already-prepared drafts compared to untouched breakouts when mixed
+      priorityScore = Number(Math.max(1, priorityScore - 6).toFixed(1));
+    }
+
+    const reasons = [];
+    if (cp.outlierScore != null) reasons.push(`${cp.outlierScore.toFixed(1)}x Outlier`);
+    if (cp.viewsPerHour != null && cp.viewsPerHour >= 100) reasons.push(`${Math.round(cp.viewsPerHour).toLocaleString()} views/h`);
+    if (maxCreatorBreadth >= 2) reasons.push(`${maxCreatorBreadth}x Competitor Proof`);
+    if (cp.commentRate != null && cp.commentRate >= 0.4) reasons.push(`${cp.commentRate}% Comment/View`);
+    if (ageDays <= 14) reasons.push(`Fresh (${Math.max(1, Math.round(ageDays))}d)`);
+
+    const topicSig = Array.from(toks).slice(0, 4).sort().join("|") || cp.code;
+
+    candidates.push({
+      ...cp,
+      priorityScore,
+      priorityReasons: reasons,
+      reproStatus: st?.status || "unreproduced",
+      localDraft: st?.status === "local_draft_only" ? st.localReel : null,
+      topicSig,
+      cta: buildCtaRecommendation(cp, account),
+    });
+  }
+
+  candidates.sort((a, b) => b.priorityScore - a.priorityScore || (b.outlierScore || 0) - (a.outlierScore || 0));
+
+  // Deduplicate near-identical topic signatures (keep max 2 per signature unless needed to fill 10)
+  const priorityTop10 = [];
+  const overflow = [];
+  const sigCounts = new Map();
+  for (const item of candidates) {
+    const cnt = sigCounts.get(item.topicSig) || 0;
+    if (item.topicSig === item.code || cnt < 2) {
+      sigCounts.set(item.topicSig, cnt + 1);
+      if (priorityTop10.length < 10) priorityTop10.push(item);
+    } else {
+      overflow.push(item);
+    }
+  }
+  while (priorityTop10.length < 10 && overflow.length) {
+    priorityTop10.push(overflow.shift());
+  }
+  priorityTop10.forEach((p, idx) => {
+    p.priorityRank = idx + 1;
+  });
+
+  // Per-competitor summary stats
+  const competitorStatusList = (account.competitors || []).map((handle) => {
+    const clean = String(handle || "").replace(/^@/, "").toLowerCase();
+    const list = competitorPosts.filter((p) => (p.username || "").toLowerCase() === clean);
+    const topOut = list.reduce((mx, p) => Math.max(mx, p.outlierScore || 0), 0);
+    const lastScrapedAt = list.reduce((latest, p) => (String(p.lastScrapedAt || "") > latest ? p.lastScrapedAt : latest), "");
+    return {
+      username: clean,
+      postsCount: list.length,
+      peakOutlier: topOut > 0 ? Number(topOut.toFixed(1)) : null,
+      lastScrapedAt: lastScrapedAt || null,
+      needsFirstScan: list.length === 0,
+    };
+  });
+
+  // KPI metrics
+  const viewNums = ownPosts.map((p) => p.views).filter((v) => typeof v === "number" && v > 0).sort((a, b) => a - b);
+  const medianViews = viewNums.length ? viewNums[Math.floor(viewNums.length / 2)] : null;
+  const peakOwnOutlier = ownPosts.reduce((mx, p) => Math.max(mx, p.outlierScore || 0), 0);
+  const publishedMatchCount = Array.from(compStatusMap.values()).filter((s) => s.status === "published_on_ig").length;
+  const localDraftMatchCount = Array.from(compStatusMap.values()).filter((s) => s.status === "local_draft_only").length;
+  const recent7dBreakouts = competitorPosts.filter(
+    (p) => (p.outlierScore || 0) >= 2.0 && p.ageHours != null && p.ageHours <= 7 * 24
+  ).length;
+
+  return {
+    ok: true,
+    account,
+    accounts: myAccountsStore.accounts,
+    activeAccountId: myAccountsStore.activeAccountId,
+    kpis: {
+      ownPublishedCount: ownPosts.length,
+      localReelsCount: localReels.length,
+      ownMedianViews: medianViews,
+      ownPeakOutlier: peakOwnOutlier > 0 ? Number(peakOwnOutlier.toFixed(1)) : null,
+      reproducedPublishedCount: publishedMatchCount,
+      reproducedLocalDraftCount: localDraftMatchCount,
+      trackedCompetitorsCount: competitorStatusList.length,
+      competitorPostsCount: competitorPosts.length,
+      recent7dBreakouts,
+    },
+    ownPosts,
+    localReels: localReels.map((lr) => ({
+      reelNumber: lr.reelNumber,
+      folderName: lr.folderName,
+      slug: lr.slug,
+      keyword: lr.keyword,
+      product: lr.product,
+      hook: lr.hook,
+      sourceShortcodes: lr.sourceShortcodes,
+      publishedMatch: localMatchToOwn.get(lr.folderName)?.ownPost?.code || null,
+    })),
+    reproducedComparisons: reproducedComparisons.slice(0, 60),
+    priorityTop10,
+    competitorStatusList,
+    cron: myAccountsStore.cron,
+  };
+}
+
+let lastAutoAccountHydrateAt = 0;
+function schedulePriorityCaptionsHydration(priorityTop10 = []) {
+  if (!isExtensionConnected()) return;
+  if (Date.now() - lastAutoAccountHydrateAt < 30000) return;
+  const missing = priorityTop10
+    .filter((p) => p.platform === "instagram" && !p.caption && !p.captionChecked)
+    .slice(0, 10)
+    .map((p) => p.code)
+    .filter(Boolean);
+  if (missing.length) {
+    lastAutoAccountHydrateAt = Date.now();
+    hydrateMissingCaptionsBatch({ shortcodes: missing, platform: "instagram", limit: 10 }).catch(() => {});
+  }
+}
+
+async function runMyAccountsCronSync({
+  accountId = myAccountsStore.activeAccountId,
+  scope = "all",
+  depthOwn = myAccountsStore.cron.ownDepth || 60,
+  depthCompetitors = myAccountsStore.cron.competitorDepth || 30,
+  onlyHandles = null,
+} = {}) {
+  const account =
+    myAccountsStore.accounts.find((a) => a.id === accountId) || myAccountsStore.accounts[0];
+  if (!account) return { ok: false, message: "No account configured." };
+  if (myAccountsStore.cron.running) {
+    return { ok: false, message: "A Cron sync is already running.", busy: true };
+  }
+  if (!isExtensionConnected()) {
+    return { ok: false, message: "Chrome extension is not connected." };
+  }
+
+  myAccountsStore.cron.running = true;
+  myAccountsStore.cron.lastError = null;
+  const startedAt = Date.now();
+
+  try {
+    let accountsToScan = [];
+    if (Array.isArray(onlyHandles) && onlyHandles.length) {
+      accountsToScan = onlyHandles.map((h) => String(h).replace(/^@/, "").trim()).filter(Boolean);
+    } else if (scope === "own") {
+      accountsToScan = [account.username];
+    } else if (scope === "competitors") {
+      accountsToScan = [...(account.competitors || [])];
+    } else {
+      accountsToScan = [account.username, ...(account.competitors || [])];
+    }
+
+    let ownPostsAdded = 0;
+    let compPostsAdded = 0;
+
+    // 1. Scan owned account directly if included so depthOwn applies
+    if (accountsToScan.includes(account.username) && (scope === "own" || scope === "all") && !onlyHandles?.length) {
+      const ownRes = await runExtensionJob(
+        {
+          platform: "instagram",
+          username: account.username.toLowerCase(),
+          surface: "reels",
+          sortBy: "outlier",
+          outlier: "on",
+          depth: Math.max(12, Math.min(1000, Number(depthOwn) || 60)),
+        },
+        300000
+      );
+      if (ownRes?.ok && Array.isArray(ownRes.rows)) {
+        const baseline = ownRes.outlier?.baseline ?? null;
+        const formatted = ownRes.rows.map((r, i) => {
+          const item = formatPostSummary(r, i, "instagram");
+          item.username = item.username || account.username.toLowerCase();
+          item.creatorBaseline = baseline;
+          item.category = account.category;
+          return item;
+        });
+        ownPostsAdded = await upsertPostsToDb(formatted, {
+          platform: "instagram",
+          username: account.username.toLowerCase(),
+          category: account.category,
+          creatorBaseline: baseline,
+          source: "my_accounts_cron",
+        });
+      }
+      accountsToScan = accountsToScan.filter((u) => u.toLowerCase() !== account.username.toLowerCase());
+    }
+
+    // 2. Parallel scrape competitors via runNicheRadar
+    let radarRes = null;
+    if (accountsToScan.length > 0) {
+      radarRes = await runNicheRadar({
+        accounts: accountsToScan,
+        daysBack: 0,
+        perAccountDepth: Math.max(12, Math.min(250, Number(depthCompetitors) || 30)),
+        sortBy: "outlier",
+        category: account.category,
+        concurrency: 3,
+      });
+      compPostsAdded = radarRes?.totalPostsScrapedAndSaved || 0;
+    }
+
+    // 3. Recompute priority recommendations and hydrate captions for Top 10
+    const analysis = analyzeAccountData(account);
+    const missingTopCodes = analysis.priorityTop10
+      .filter((p) => p.platform === "instagram" && !p.caption)
+      .map((p) => p.code)
+      .filter(Boolean);
+    if (missingTopCodes.length) {
+      await hydrateMissingCaptionsBatch({ shortcodes: missingTopCodes, platform: "instagram", limit: 10 }).catch(() => {});
+    }
+
+    const updatedAnalysis = analyzeAccountData(account);
+    const intervalHrs = Math.max(1, Number(myAccountsStore.cron.intervalHours) || 6);
+    myAccountsStore.cron.lastRunAt = new Date().toISOString();
+    myAccountsStore.cron.nextRunAt = new Date(Date.now() + intervalHrs * 3600 * 1000).toISOString();
+    myAccountsStore.cron.lastSummary = {
+      accountId: account.id,
+      scope,
+      ownPostsAdded,
+      compPostsAdded,
+      durationMs: Date.now() - startedAt,
+      finishedAt: myAccountsStore.cron.lastRunAt,
+    };
+    await saveJson(MY_ACCOUNTS_FILE, myAccountsStore);
+
+    return { ok: true, summary: myAccountsStore.cron.lastSummary, data: updatedAnalysis };
+  } catch (err) {
+    myAccountsStore.cron.lastError = err?.message || String(err);
+    await saveJson(MY_ACCOUNTS_FILE, myAccountsStore);
+    return { ok: false, message: myAccountsStore.cron.lastError };
+  } finally {
+    myAccountsStore.cron.running = false;
+  }
+}
+
+async function handleMyAccountsConfigAction(body = {}) {
+  const action = String(body.action || "").trim();
+  const targetId = body.accountId || myAccountsStore.activeAccountId;
+  const account = myAccountsStore.accounts.find((a) => a.id === targetId);
+
+  if (action === "setActiveAccount" && account) {
+    myAccountsStore.activeAccountId = account.id;
+  } else if (action === "addAccount") {
+    const cleanUser = String(body.username || "").replace(/^@/, "").trim().toLowerCase();
+    if (!cleanUser) return { ok: false, message: "Missing Instagram username." };
+    const id = `${String(body.category || "custom").toLowerCase().replace(/[^a-z0-9]/g, "")}_${cleanUser}`;
+    if (!myAccountsStore.accounts.some((a) => a.id === id)) {
+      const comps = String(body.competitors || "")
+        .split(/[\s,;\n]+/)
+        .map((c) => c.replace(/^@/, "").trim().toLowerCase())
+        .filter(Boolean);
+      myAccountsStore.accounts.push({
+        id,
+        username: cleanUser,
+        aliases: [],
+        displayName: body.displayName || `@${cleanUser}`,
+        platform: "instagram",
+        category: ensureCategoryExists(body.category || "Pets"),
+        localReelsDir: null,
+        localDescriptionsFile: null,
+        competitors: comps,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    myAccountsStore.activeAccountId = id;
+  } else if (action === "addCompetitor" && account) {
+    const raw = String(body.competitor || "");
+    const parts = raw
+      .split(/[\s,;\n]+/)
+      .map((s) => parseCreatorTarget(s, "instagram")?.username || s.replace(/^@/, "").trim().toLowerCase())
+      .filter(Boolean);
+    for (const c of parts) {
+      if (!account.competitors.includes(c) && c !== account.username.toLowerCase()) {
+        account.competitors.push(c);
+      }
+    }
+  } else if (action === "removeCompetitor" && account) {
+    const c = String(body.competitor || "").replace(/^@/, "").trim().toLowerCase();
+    account.competitors = (account.competitors || []).filter((x) => x.toLowerCase() !== c);
+  } else if (action === "markReproduced") {
+    const code = String(body.shortcode || body.code || "").trim();
+    if (!code) return { ok: false, message: "Missing shortcode." };
+    if (body.status === "clear") {
+      delete myAccountsStore.manualReproduced[code];
+    } else {
+      myAccountsStore.manualReproduced[code] = {
+        status: body.status === "ignored" ? "ignored" : "published",
+        ownCode: String(body.ownCode || "").trim(),
+        note: String(body.note || "").trim(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+  } else if (action === "updateCron") {
+    if (typeof body.enabled === "boolean") myAccountsStore.cron.enabled = body.enabled;
+    if (body.intervalHours != null) {
+      const hrs = Math.max(1, Math.min(48, Number(body.intervalHours) || 6));
+      myAccountsStore.cron.intervalHours = hrs;
+      myAccountsStore.cron.nextRunAt = new Date(Date.now() + hrs * 3600 * 1000).toISOString();
+    }
+  }
+
+  await saveJson(MY_ACCOUNTS_FILE, myAccountsStore);
+  const active =
+    myAccountsStore.accounts.find((a) => a.id === myAccountsStore.activeAccountId) ||
+    myAccountsStore.accounts[0];
+  return analyzeAccountData(active);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HTTP + WebSocket Hub Server on 127.0.0.1:8765
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -3543,6 +4541,35 @@ async function startLocalHub() {
       return sendJson(res, 200, out);
     }
 
+    // 8. My Accounts Hub, Priority Recommender & 6h Cron Endpoints
+    if (req.method === "GET" && pathname === "/api/my-accounts") {
+      const accId = urlObj.searchParams.get("accountId") || myAccountsStore.activeAccountId;
+      const excludeLocalDrafts = urlObj.searchParams.get("excludeLocalDrafts") === "1";
+      const account =
+        myAccountsStore.accounts.find((a) => a.id === accId) || myAccountsStore.accounts[0];
+      const data = analyzeAccountData(account, { excludeLocalDrafts });
+      schedulePriorityCaptionsHydration(data.priorityTop10);
+      return sendJson(res, 200, data);
+    }
+
+    if (req.method === "POST" && pathname === "/api/my-accounts/config") {
+      try {
+        const out = await handleMyAccountsConfigAction(body);
+        return sendJson(res, 200, out);
+      } catch (err) {
+        return sendJson(res, 200, { ok: false, message: err?.message || String(err) });
+      }
+    }
+
+    if (req.method === "POST" && pathname === "/api/my-accounts/sync") {
+      try {
+        const out = await runMyAccountsCronSync(body);
+        return sendJson(res, 200, out);
+      } catch (err) {
+        return sendJson(res, 200, { ok: false, message: err?.message || String(err) });
+      }
+    }
+
     return sendJson(res, 404, { ok: false, error: "NOT_FOUND", path: pathname });
   });
 
@@ -3652,6 +4679,17 @@ async function startLocalHub() {
     });
     server.listen(PORT, HOST, () => {
       isPrimaryHub = true;
+      // 6-hour automatic Cron loop for My Accounts (own account + competitors)
+      setInterval(() => {
+        if (!myAccountsStore.cron.enabled || myAccountsStore.cron.running || !isExtensionConnected()) return;
+        const nextMs = myAccountsStore.cron.nextRunAt ? Date.parse(myAccountsStore.cron.nextRunAt) : 0;
+        if (!Number.isFinite(nextMs) || Date.now() >= nextMs) {
+          runMyAccountsCronSync({
+            accountId: myAccountsStore.activeAccountId,
+            scope: "all",
+          }).catch(() => {});
+        }
+      }, 60 * 1000);
       resolve({ primary: true, server });
     });
   });

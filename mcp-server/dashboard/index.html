@@ -31,6 +31,16 @@
       </div>
 
       <nav class="nav-group" aria-label="Primary">
+        <button class="nav-item" data-view="accounts" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <polyline points="16 11 18 13 22 9"></polyline>
+          </svg>
+          <span>My Accounts</span>
+          <span id="myAccountsBadge" class="nav-pill">Top 10</span>
+        </button>
+
         <button class="nav-item is-active" data-view="spy" type="button">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
             <circle cx="11" cy="11" r="7"></circle>
@@ -122,6 +132,146 @@
         <div class="job-spinner"></div>
         <span id="globalJobText">Scanning profile in Chrome…</span>
       </div>
+
+      <!-- VIEW 0: MY ACCOUNTS INTELLIGENCE HUB -->
+      <section id="view-accounts" class="view-panel">
+        <header class="view-header">
+          <div>
+            <h1 class="view-title">My Accounts · @k9americandog &amp; Priority Engine</h1>
+            <p class="view-subtitle">Live IG account tracking, side-by-side niche comparison, 6h auto-cron, and Top 10 priority remakes with adapted CTAs (Multivitamin, Dental Powder, Dash, Listicle, ManyChat).</p>
+          </div>
+          <div class="header-actions">
+            <button id="syncOwnAccountBtn" type="button" class="btn-secondary">Sync My Account</button>
+            <button id="syncAllCronBtn" type="button" class="btn-primary">Sync All (Me + Competitors)</button>
+          </div>
+        </header>
+
+        <!-- Account Switcher & Cron Bar -->
+        <div class="control-card my-accounts-bar">
+          <div class="my-accounts-bar-top">
+            <div class="accounts-switcher-wrap">
+              <div id="accountsProfileSeg" class="seg-group" role="tablist" aria-label="My Accounts"></div>
+              <button id="addMyAccountBtn" type="button" class="btn-secondary btn-sm">+ Account</button>
+            </div>
+
+            <div class="cron-controls-wrap">
+              <span id="cronStatusPill" class="cron-status-pill">Cron 6h Active</span>
+              <select id="cronIntervalSelect" class="apple-select" aria-label="Cron schedule">
+                <option value="6" selected>Cron: Every 6h</option>
+                <option value="12">Cron: Every 12h</option>
+                <option value="24">Cron: Every 24h</option>
+                <option value="0">Cron: Paused</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4 KPI Cards -->
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <span class="kpi-label">My Account (Published IG)</span>
+            <strong id="accKpiOwnCount" class="kpi-value">—</strong>
+            <span id="accKpiOwnSub" class="kpi-sub">0 local Reels</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">My Median &amp; Peak</span>
+            <strong id="accKpiOwnPerf" class="kpi-value accent-amber">—</strong>
+            <span id="accKpiOwnPerfSub" class="kpi-sub">Scan IG account to benchmark</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Reproduced Coverage</span>
+            <strong id="accKpiReproCount" class="kpi-value">—</strong>
+            <span id="accKpiReproSub" class="kpi-sub">IG published vs local drafts</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Competitor Watchlist</span>
+            <strong id="accKpiCompCount" class="kpi-value">—</strong>
+            <span id="accKpiCompSub" class="kpi-sub">0 breakouts in 7d</span>
+          </div>
+        </div>
+
+        <!-- Sub-tabs -->
+        <div class="accounts-subtabs-row">
+          <div id="accountsSubTabSeg" class="seg-group seg-group-compact" role="tablist">
+            <button type="button" class="seg-btn is-active" data-acctab="priority">🔥 Top 10 Priority to Reproduce</button>
+            <button type="button" class="seg-btn" data-acctab="own">🏆 My Best Performing Posts</button>
+            <button type="button" class="seg-btn" data-acctab="reproduced">🔄 Reproduced vs Niche</button>
+            <button type="button" class="seg-btn" data-acctab="competitors">📡 Competitors &amp; Cron</button>
+          </div>
+        </div>
+
+        <!-- Sub-view 1: Top 10 Priority -->
+        <div id="accPanel-priority" class="acc-subpanel">
+          <div class="control-card acc-filter-bar">
+            <div class="acc-filter-left">
+              <div id="accCtaFilterSeg" class="seg-group seg-group-compact">
+                <button type="button" class="seg-btn is-active" data-cta="all">All CTAs</button>
+                <button type="button" class="seg-btn" data-cta="multivitamin">Multivitamin</button>
+                <button type="button" class="seg-btn" data-cta="dental">Dental Powder</button>
+                <button type="button" class="seg-btn" data-cta="dash">Dash Dog Food</button>
+                <button type="button" class="seg-btn" data-cta="listicle">Listicle</button>
+                <button type="button" class="seg-btn" data-cta="manychat_value">ManyChat Value</button>
+              </div>
+            </div>
+            <label class="apple-check-pill" title="Hide scripts already built in local Wade/Reels even if not yet detected on @k9americandog">
+              <input id="accExcludeLocalCheck" type="checkbox" />
+              <span>Hide Local Wade/Reels Drafts</span>
+            </label>
+          </div>
+          <div id="accPriorityList" class="priority-list"></div>
+        </div>
+
+        <!-- Sub-view 2: My Best Performing Posts -->
+        <div id="accPanel-own" class="acc-subpanel" hidden>
+          <div class="control-card acc-filter-bar">
+            <div class="sort-pills-wrap">
+              <span class="control-label">Sort my posts by</span>
+              <div id="accOwnSortSeg" class="seg-group seg-group-compact">
+                <button type="button" class="seg-btn is-active" data-sort="outlier">Outlier Score</button>
+                <button type="button" class="seg-btn" data-sort="velocity">Velocity ⚡</button>
+                <button type="button" class="seg-btn" data-sort="views">Views</button>
+                <button type="button" class="seg-btn" data-sort="comments">Comments</button>
+                <button type="button" class="seg-btn" data-sort="commentRate">DM / Comment %</button>
+              </div>
+            </div>
+            <span id="accOwnCounter" class="control-label">0 published posts</span>
+          </div>
+          <div id="accOwnEmptyCallout" class="empty-stage" hidden>
+            <h2>@k9americandog not scanned yet</h2>
+            <p id="accOwnEmptyDesc">Run a 1-click scan of your Instagram account so ViralSpy can rank your top hits and compare what is actually published live against your competitors.</p>
+            <button id="accOwnScanNowBtn" type="button" class="btn-primary">Scan My Account Now</button>
+          </div>
+          <div id="accOwnMediaGrid" class="media-grid"></div>
+        </div>
+
+        <!-- Sub-view 3: Reproduced vs Niche Comparison -->
+        <div id="accPanel-reproduced" class="acc-subpanel" hidden>
+          <div class="control-card acc-filter-bar">
+            <div id="accReproFilterSeg" class="seg-group seg-group-compact">
+              <button type="button" class="seg-btn is-active" data-repro="all">All Matched</button>
+              <button type="button" class="seg-btn" data-repro="published_on_ig">✓ Published on IG (Ultimate Ref)</button>
+              <button type="button" class="seg-btn" data-repro="local_draft_only">📁 Local Wade/Reels Only</button>
+            </div>
+            <span id="accReproCounter" class="control-label">0 comparisons</span>
+          </div>
+          <div id="accReproList" class="reproduce-packs-stack"></div>
+        </div>
+
+        <!-- Sub-view 4: Competitors & Cron Watchlist -->
+        <div id="accPanel-competitors" class="acc-subpanel" hidden>
+          <div class="control-card acc-filter-bar">
+            <div class="seed-inline" style="flex:1; max-width:540px;">
+              <div class="input-handle-wrap compact" style="flex:1;">
+                <span class="input-prefix">@</span>
+                <input id="accAddCompetitorInput" type="text" placeholder="Add competitor handle or URL (comma separated)" autocomplete="off" />
+              </div>
+              <button id="accAddCompetitorBtn" type="button" class="btn-secondary">Add Competitor</button>
+            </div>
+            <button id="accScanMissingCompsBtn" type="button" class="btn-primary">Scan Unscraped Competitors</button>
+          </div>
+          <div id="accCompetitorsGrid" class="competitor-watch-grid"></div>
+        </div>
+      </section>
 
       <!-- VIEW 1: CREATOR SPY -->
       <section id="view-spy" class="view-panel is-active">
