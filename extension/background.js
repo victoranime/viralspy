@@ -633,61 +633,10 @@ chrome.runtime.onInstalled.addListener(async function (details) {
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// take uses to instagram when they click on icon
+// Popup is declared via manifest.json "default_popup": "popup.html".
+// Do NOT call chrome.action.setPopup inside chrome.tabs.onUpdated, as mutating
+// the active tab's action popup during New Tab creation steals omnibox focus.
 ////////////////////////////////////////////////////////////////////////////////
-
-chrome.action.onClicked.addListener((tab) => {
-  chrome.tabs.query(
-    {
-      active: true,
-      currentWindow: true,
-    },
-    (tabs) => {
-      let url = tabs[0].url;
-
-      chrome.action.setPopup({
-        tabId: tabs[0].id,
-        popup: "popup.html",
-      });
-
-      // open up instagram if we are not on Instagram
-      // if (!url.startsWith('https://www.instagram.com/')) {
-      // 	var newURL = "https://www.instagram.com/";
-      // 	chrome.tabs.create({
-      // 		url: newURL
-      // 	});
-      //
-      // }
-      //
-      // else if (url.startsWith('https://www.instagram.com/')) {
-      // 	chrome.action.setPopup({
-      // 		tabId: tabs[0].id,
-      // 		popup: 'popup.html'
-      // 	});
-      //
-      // }
-    },
-  );
-});
-
-////////////////////////////////////////////////////////////////////////////////
-// initiate popup so it works on first click, not second click
-////////////////////////////////////////////////////////////////////////////////
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  chrome.tabs.query(
-    {
-      active: true,
-      currentWindow: true,
-    },
-    (tabs) => {
-      chrome.action.setPopup({
-        tabId: tabs[0].id,
-        popup: "popup.html",
-      });
-    },
-  );
-});
 
 ////////////////////////////////////////////////////////////////////////////////
 // save data into indexDB
@@ -1878,8 +1827,8 @@ else if (message.command === "FacebookReelTranscribe") {
 ////////////////////////////////////////////////////////////////////////////////
 
 chrome.webNavigation.onCompleted.addListener((details) => {
-  // Send message to content script when page loads
-  if (details.frameId === 0) { // Main frame only
+  // Send message to TikTok content script when main frame loads
+  if (details.frameId === 0 && typeof details.url === "string" && details.url.includes("tiktok.com")) {
     chrome.tabs.sendMessage(details.tabId, {
       action: 'pageLoaded',
       url: details.url

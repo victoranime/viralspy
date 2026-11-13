@@ -68,7 +68,7 @@
    "name": "ViralSpy — Sort, Outlier & AI Spy (Instagram, Facebook, TikTok, YouTube)",
    "permissions": [ "activeTab", "tabs", "declarativeNetRequest", "webNavigation", "storage", "alarms", "scripting" ],
    "short_name": "ViralSpy",
-   "version": "21.4",
+   "version": "21.5",
    "web_accessible_resources": [ {
       "matches": [ "https://www.instagram.com/*", "https://www.tiktok.com/*", "https://www.youtube.com/*", "https://*.sortfeed.com/*" ],
       "resources": [ "Icons/*.png", "Icons/*.svg", "Icons/sf/*.svg", "Icons/BannerIcons/*.png", "Icons/BannerIconNew/*.svg", "Icons/ButtonIcons/*.svg", "Icons/popupIcons/*.svg", "Icons/Hover/*.png", "Icons/ZeroStateIcons/*", "Instagram/script_instagram.js", "Instagram/explore_sort_instagram.js", "Instagram/saved_sort_instagram.js", "Tiktok/script_tiktok.js", "Tiktok/search/search_sort_tiktok.js", "Tiktok/saved/saved_sort_tiktok.js", "Tiktok/similar/similar_fetch_tiktok.js", "YouTube/script_youtube.js" ]

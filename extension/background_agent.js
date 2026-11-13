@@ -384,14 +384,35 @@ function sfAgentEnqueue(job) {
     // Fast-lane: run read-only Instagram media_info immediately if an Instagram tab is already open
     chrome.tabs.query({ url: "*://*.instagram.com/*" }).then((tabs) => {
       if (tabs && tabs.length > 0 && tabs[0]?.id != null) {
-        sfAgentFastMediaInfo(job, tabs[0].id).catch(() => {
-          SF_AGENT.queue = SF_AGENT.queue.then(() => sfAgentRunJob(job)).catch(() => {});
+        sfAgentFastMediaInfo(job, tabs[0].id).catch((err) => {
+          sfAgentSend({
+            type: "result",
+            jobId: job.jobId,
+            ok: false,
+            error: { code: "NO_IG_TAB", message: err?.message || "Instagram tab unavailable." },
+          });
+        });
+      } else if (job.noCreateTab) {
+        sfAgentSend({
+          type: "result",
+          jobId: job.jobId,
+          ok: false,
+          error: { code: "NO_IG_TAB", message: "No open Instagram tab for background hydration." },
         });
       } else {
         SF_AGENT.queue = SF_AGENT.queue.then(() => sfAgentRunJob(job)).catch(() => {});
       }
-    }).catch(() => {
-      SF_AGENT.queue = SF_AGENT.queue.then(() => sfAgentRunJob(job)).catch(() => {});
+    }).catch((err) => {
+      if (job.noCreateTab) {
+        sfAgentSend({
+          type: "result",
+          jobId: job.jobId,
+          ok: false,
+          error: { code: "NO_IG_TAB", message: err?.message || "No open Instagram tab for background hydration." },
+        });
+      } else {
+        SF_AGENT.queue = SF_AGENT.queue.then(() => sfAgentRunJob(job)).catch(() => {});
+      }
     });
     return;
   }
@@ -832,7 +853,11 @@ async function sfAgentRunJob(job) {
         return;
       }
 
-      const tabId = await sfAgentOpenTabUnless("https://www.instagram.com/");
+      const tabId = await sfAgentFindExistingIgTab(!job.noCreateTab);
+      if (!tabId) {
+        sfAgentSend({ type: "result", jobId, ok: false, error: { code: "NO_IG_TAB", message: "Open an Instagram tab in Chrome first." }, ms: Date.now() - t0 });
+        return;
+      }
       const execRes = await chrome.scripting.executeScript({
         target: { tabId },
         world: "MAIN",
@@ -902,7 +927,11 @@ async function sfAgentRunJob(job) {
 
     if (isComments) {
       const t0 = Date.now();
-      const tabId = await sfAgentOpenTabUnless("https://www.instagram.com/");
+      const tabId = await sfAgentFindExistingIgTab(!job.noCreateTab);
+      if (!tabId) {
+        sfAgentSend({ type: "result", jobId, ok: false, error: { code: "NO_IG_TAB", message: "Open an Instagram tab in Chrome first." }, ms: Date.now() - t0 });
+        return;
+      }
       const maxComments = Math.max(15, Math.min(150, parseInt(job.limit, 10) || 60));
       const execRes = await chrome.scripting.executeScript({
         target: { tabId },
@@ -1496,6 +1525,24 @@ function sfAgentShortWhy(e) {
 // longer hear us (and keep their banner up): such a tab is navigated afresh, never reused as it is.
 async function sfAgentTabAlive(tabId) {
   try { const r = await chrome.tabs.sendMessage(tabId, { type: "SF_AGENT_PING" }); return !!(r && r.ok); } catch (e) { return false; }
+}
+
+// Reuse any already-open Instagram tab for same-origin fetch jobs without navigating or stealing focus.
+async function sfAgentFindExistingIgTab(allowCreate = true) {
+  try {
+    const t = SF_AGENT.tabId != null ? await chrome.tabs.get(SF_AGENT.tabId) : null;
+    if (t && typeof t.url === "string" && /^https:\/\/(www\.)?instagram\.com\//i.test(t.url)) {
+      return t.id;
+    }
+  } catch (e) {}
+  try {
+    const tabs = await chrome.tabs.query({ url: "*://*.instagram.com/*" });
+    if (tabs && tabs.length > 0 && tabs[0]?.id != null) {
+      return tabs[0].id;
+    }
+  } catch (e) {}
+  if (!allowCreate) return null;
+  return sfAgentOpenTab("https://www.instagram.com/");
 }
 
 // The job tab, on `url` — reused as it is when it's already there and alive (a reload would only race the page's

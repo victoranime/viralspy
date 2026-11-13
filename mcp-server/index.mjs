@@ -2516,6 +2516,7 @@ async function fetchAndPersistPostDetails(params = {}) {
         shortcode,
         username: params.username || existing?.username || parsed?.username || "",
         url: params.url || existing?.url || parsed?.url || `https://www.instagram.com/reel/${shortcode}/`,
+        noCreateTab: Boolean(params.noCreateTab),
       },
       35000
     );
@@ -2581,7 +2582,7 @@ async function hydrateMissingCaptionsBatch({ shortcodes = [], username = "", pla
       const key = `${plat}:${code}`;
       if (postsDb[key]?.caption) continue;
       try {
-        const res = await fetchAndPersistPostDetails({ shortcode: code, platform: plat });
+        const res = await fetchAndPersistPostDetails({ shortcode: code, platform: plat, noCreateTab: true });
         if (res?.ok) hydrated += 1;
       } catch (_) {}
       await new Promise((r) => setTimeout(r, 260));
