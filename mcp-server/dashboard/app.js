@@ -1360,6 +1360,12 @@ function renderVideoDb() {
           : "";
       const cat = p.category || "Uncategorized";
       const hasCap = Boolean(p.caption && String(p.caption).trim());
+      const isAd = Boolean(p.isAdLibrary || p.kind === "ad" || /facebook\.com\/ads\/library/i.test(p.url || ""));
+      const authorLabel = p.username
+        ? /\s/.test(p.username)
+          ? esc(p.username)
+          : `@${esc(p.username)}`
+        : "";
 
       return `
       <article class="pack-row-card" data-pack-id="${esc(p.packId)}">
@@ -1371,7 +1377,8 @@ function renderVideoDb() {
           <div class="pack-meta-main">
             <div class="pack-title-line">
               <span class="pack-id-code">${esc(p.packId)}.zip</span>
-              ${p.username ? `<strong>@${esc(p.username)}</strong>` : ""}
+              ${authorLabel ? `<strong>${authorLabel}</strong>` : ""}
+              ${isAd ? `<span class="mini-tag">FB Ads Library</span>` : ""}
               <select class="category-select-pill" data-pack-cat data-cat="${esc(cat)}" title="Change thematic category">
                 ${buildInlineCategoryOptionsHtml(cat)}
               </select>
@@ -1409,7 +1416,10 @@ function renderVideoDb() {
             <button type="button" class="btn-secondary btn-sm" data-pack-act="toggle-scenes">${
               isExpanded ? "Hide Scenes ▲" : `View ${p.sceneCount || 0} Scenes ▼`
             }</button>
-            <button type="button" class="btn-ghost-xs" data-pack-act="delete" style="align-self:flex-end;">Delete</button>
+            <div style="display:flex;gap:8px;align-self:flex-end;">
+              ${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener" class="btn-ghost-xs">Source ↗</a>` : ""}
+              <button type="button" class="btn-ghost-xs" data-pack-act="delete">Delete</button>
+            </div>
           </div>
         </div>
 

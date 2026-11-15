@@ -427,12 +427,100 @@
     stackEl.insertBefore(repBtn, stackEl.firstChild);
   }
 
+  // ── Facebook Ads Library Video Cards (/ads/library/*) ─────────────────────
+  const AD_ID_LABEL_RE =
+    /(?:Library\s*ID|ID\s+dans\s+la\s+biblioth[èe]que|Identifiant\s+de\s+la\s+biblioth[èe]que|Archive\s*ID|ID\s+de\s+la\s+biblioteca|Bibliotheks-ID)\s*[:#]?\s*(\d{10,22})/gi;
+
+  function resolveContextFromAdsLibraryVideo(videoEl) {
+    let adId = null;
+    let cardRoot = null;
+    let cur = videoEl?.parentElement || null;
+
+    for (let depth = 0; cur && cur !== document.body && depth < 18; depth++, cur = cur.parentElement) {
+      const txt = cur.textContent || "";
+      if (txt.length > 18000) break;
+      const matches = new Set();
+      let m;
+      AD_ID_LABEL_RE.lastIndex = 0;
+      while ((m = AD_ID_LABEL_RE.exec(txt)) !== null) {
+        matches.add(m[1]);
+        if (matches.size > 1) break;
+      }
+      if (matches.size === 1) {
+        adId = Array.from(matches)[0];
+        cardRoot = cur;
+        break;
+      }
+      if (matches.size > 1) break;
+    }
+
+    if (!adId) {
+      const urlAdId = new URLSearchParams(location.search).get("id");
+      if (urlAdId && /^\d{8,22}$/.test(urlAdId)) {
+        adId = urlAdId;
+      }
+    }
+
+    let username = "";
+    if (cardRoot) {
+      const links = cardRoot.querySelectorAll('a[href*="facebook.com/"]');
+      for (const a of links) {
+        const href = a.getAttribute("href") || "";
+        if (/\/(?:ads\/library|l\.php|policies|help|legal|privacy)/i.test(href)) continue;
+        const label = (a.textContent || "").replace(/\s+/g, " ").trim();
+        if (label && label.length >= 2 && label.length <= 70) {
+          username = label;
+          break;
+        }
+      }
+    }
+
+    const rawSrc = videoEl?.currentSrc || videoEl?.src || "";
+    const directVideoUrl = /^https?:\/\//i.test(rawSrc) ? rawSrc : null;
+    const posterUrl = videoEl?.poster && /^https?:\/\//i.test(videoEl.poster) ? videoEl.poster : null;
+    const adUrl = adId ? `https://www.facebook.com/ads/library/?id=${adId}` : location.href;
+
+    return {
+      platform: "facebook",
+      isAdLibrary: true,
+      kind: "ad",
+      shortcode: adId,
+      username,
+      url: adUrl,
+      videoUrl: directVideoUrl,
+      thumbnailUrl: posterUrl,
+    };
+  }
+
+  function attachReproduceOnAdsLibraryVideo(videoEl) {
+    if (!videoEl || videoEl.dataset.vsAdlibAttached === "1") return;
+    if (!/^\/ads\/library/i.test(location.pathname)) return;
+    const host = videoEl.parentElement;
+    if (!host) return;
+
+    videoEl.dataset.vsAdlibAttached = "1";
+    const computedPos = window.getComputedStyle(host).position;
+    if (computedPos === "static") {
+      host.style.position = "relative";
+    }
+
+    const pill = document.createElement("div");
+    pill.className = "vs-adlib-pill";
+    pill.dataset.sfAction = "true";
+    const repBtn = createReproduceBtnElement(() => resolveContextFromAdsLibraryVideo(videoEl), false);
+    pill.appendChild(repBtn);
+    host.appendChild(pill);
+  }
+
   function scanAndAttachAll() {
     document.querySelectorAll(".sf-save-btn").forEach(attachReproduceAboveSave);
     if (IS_FACEBOOK) {
       document
         .querySelectorAll(".sf-fb-reel-pill, .sf-fb-hover-cluster, .sf-fb-tile-actions")
         .forEach(attachReproduceOnFacebookStack);
+      if (/^\/ads\/library/i.test(location.pathname)) {
+        document.querySelectorAll("video").forEach(attachReproduceOnAdsLibraryVideo);
+      }
     }
   }
 
@@ -514,7 +602,7 @@
 
   // ── DOM Observer ──────────────────────────────────────────────────────────
   const ACTION_SELECTOR = IS_FACEBOOK
-    ? ".sf-save-btn, .sf-fb-reel-pill, .sf-fb-hover-cluster, .sf-fb-tile-actions"
+    ? ".sf-save-btn, .sf-fb-reel-pill, .sf-fb-hover-cluster, .sf-fb-tile-actions, video"
     : ".sf-save-btn";
 
   function bootObserver() {

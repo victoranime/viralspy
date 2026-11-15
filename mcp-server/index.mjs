@@ -343,6 +343,10 @@ function extractShortcode(input) {
   const s = String(input || "").trim();
   const igMatch = s.match(/instagram\.com\/(?:[^/?#]+\/)?(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/i);
   if (igMatch) return igMatch[1];
+  const fbAdMatch =
+    s.match(/facebook\.com\/ads\/(?:library|archive\/render_ad)\/?\?(?:[^#]*&)?id=(\d+)/i) ||
+    s.match(/facebook\.com\/(?:[^#]*[?&])ad_archive_id=(\d+)/i);
+  if (fbAdMatch) return fbAdMatch[1];
   const fbMatch =
     s.match(/facebook\.com\/reel\/(\d+)/i) ||
     s.match(/facebook\.com\/(?:[^/?#]+\/)?videos\/(\d+)/i) ||
@@ -370,6 +374,21 @@ function parseVideoTarget(input, fallbackPlatform = "instagram") {
       shortcode,
       username: maybeUser,
       url: `https://www.instagram.com/reel/${shortcode}/`,
+    };
+  }
+
+  const fbAdMatch =
+    s.match(/facebook\.com\/ads\/(?:library|archive\/render_ad)\/?\?(?:[^#]*&)?id=(\d+)/i) ||
+    s.match(/facebook\.com\/(?:[^#]*[?&])ad_archive_id=(\d+)/i);
+  if (fbAdMatch) {
+    const adId = fbAdMatch[1];
+    return {
+      platform: "facebook",
+      isAdLibrary: true,
+      kind: "ad",
+      shortcode: adId,
+      username: "",
+      url: `https://www.facebook.com/ads/library/?id=${adId}`,
     };
   }
 
@@ -503,12 +522,19 @@ function normalizeSavedPost(raw, fallbackPlatform = "instagram") {
     raw.video_url ||
     null;
 
+  const isAdItem =
+    Boolean(raw.isAdLibrary) ||
+    raw.kind === "ad" ||
+    (raw.url && /facebook\.com\/ads\/library/i.test(raw.url));
+
   const url =
     raw.url ||
     (platform === "tiktok"
       ? `https://www.tiktok.com/@${username || "_"}/video/${code}`
       : platform === "facebook"
-      ? `https://www.facebook.com/reel/${code}/`
+      ? isAdItem
+        ? `https://www.facebook.com/ads/library/?id=${code}`
+        : `https://www.facebook.com/reel/${code}/`
       : `https://www.instagram.com/reel/${code}/`);
 
   const createdMs = createDate ? Date.parse(createDate) : NaN;
@@ -523,7 +549,7 @@ function normalizeSavedPost(raw, fallbackPlatform = "instagram") {
     platform,
     code,
     shortcode: code,
-    kind: raw.kind || "reel",
+    kind: raw.kind || (isAdItem ? "ad" : "reel"),
     url,
     username,
     creatorName: raw.creator?.name || "",
@@ -1145,19 +1171,28 @@ async function downloadMediaToFile(url, destPath) {
   await fsp.writeFile(destPath, Buffer.from(arrayBuffer));
 }
 
-// Direct 2026 Facebook Comet Reel Resolver (HTML <script type="application/json"> + yt-dlp fallback)
+// Direct 2026 Facebook Comet Reel & Meta Ads Library Resolver (HTML <script type="application/json"> + yt-dlp FacebookAds/Facebook extractor)
 async function resolveFacebookReelDirect(shortcodeOrUrl) {
   const raw = String(shortcodeOrUrl || "").trim();
-  if (!raw) return { ok: false, message: "Missing Facebook Reel ID or URL." };
+  if (!raw) return { ok: false, message: "Missing Facebook Reel or Ad Library URL." };
 
   const parsed = parseVideoTarget(raw, "facebook");
   let code = parsed?.shortcode || (/^\d+$/.test(raw) ? raw : "");
+  const isAdLibrary =
+    Boolean(parsed?.isAdLibrary) ||
+    /facebook\.com\/ads\//i.test(raw) ||
+    /[?&]ad_archive_id=\d+/i.test(raw);
   const targetUrl =
     /^https?:\/\//i.test(raw)
       ? raw
-      : parsed?.url || (code ? `https://www.facebook.com/reel/${code}/` : "");
+      : parsed?.url ||
+        (code
+          ? isAdLibrary
+            ? `https://www.facebook.com/ads/library/?id=${code}`
+            : `https://www.facebook.com/reel/${code}/`
+          : "");
 
-  if (!targetUrl) return { ok: false, message: "Invalid Facebook Reel target." };
+  if (!targetUrl) return { ok: false, message: "Invalid Facebook target URL." };
 
   let videoUrl = null;
   let audioUrl = null;
@@ -1169,175 +1204,222 @@ async function resolveFacebookReelDirect(shortcodeOrUrl) {
   let views = null;
   let durationSec = null;
 
-  try {
-    const resp = await fetch(targetUrl, {
-      redirect: "follow",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-      },
-    });
-    if (resp.url) {
-      const mFinal = resp.url.match(/\/reel\/(\d+)/i) || resp.url.match(/\/videos\/(\d+)/i);
-      if (mFinal) code = mFinal[1];
-    }
-    if (resp.ok) {
-      const html = await resp.text();
-      const scriptRe = /<script[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/gi;
-      let match;
-      while ((match = scriptRe.exec(html)) !== null) {
-        const txt = match[1] || "";
-        if (
-          !/(browser_native_|playable_url|progressive_url|hd_src|sd_src|dash_manifest|short_form_video_context|creation_story)/.test(
-            txt
-          )
-        ) {
-          continue;
-        }
-        let parsedJson;
-        try {
-          parsedJson = JSON.parse(txt);
-        } catch (_) {
-          continue;
-        }
-
-        const walk = (node) => {
-          if (!node || typeof node !== "object") return;
-          if (Array.isArray(node)) {
-            for (const item of node) walk(item);
-            return;
-          }
-
-          const nodeId = String(node.id || node.video_id || "");
-          const matchesTarget = !code || !nodeId || nodeId === code;
-
-          // Video & audio delivery fields
-          const hd =
-            node.browser_native_hd_url ||
-            node.playable_url_quality_hd ||
-            node.hd_src_no_ratelimit ||
-            node.hd_src ||
-            (Array.isArray(node.progressive_urls)
-              ? node.progressive_urls.find((p) => p?.metadata?.quality === "HD")?.progressive_url
-              : null);
-          const sd =
-            node.browser_native_sd_url ||
-            node.playable_url ||
-            node.sd_src_no_ratelimit ||
-            node.sd_src ||
-            (Array.isArray(node.progressive_urls)
-              ? node.progressive_urls.find((p) => p?.metadata?.quality === "SD")?.progressive_url ||
-                node.progressive_urls.find((p) => p?.progressive_url)?.progressive_url
-              : null);
-
-          if ((hd || sd) && (!videoUrl || matchesTarget)) {
-            videoUrl = hd || sd || videoUrl;
-          }
-
-          const dashXml = node.dash_manifest_xml_string || node.dash_manifest || node.manifest_xml;
-          if (typeof dashXml === "string" && !audioUrl) {
-            const audioMatch = dashXml.match(
-              /<AdaptationSet[^>]*contentType="audio"[^>]*>[\s\S]*?<BaseURL>([^<]+)<\/BaseURL>/i
-            );
-            if (audioMatch?.[1]) {
-              audioUrl = audioMatch[1].replace(/&amp;/g, "&");
-            }
-          }
-
-          if (!thumbnailUrl) {
-            thumbnailUrl =
-              node.preferred_thumbnail?.image?.uri ||
-              node.thumbnailImage?.uri ||
-              node.first_frame_thumbnail ||
-              null;
-          }
-          if (durationSec == null && typeof node.playable_duration_in_ms === "number" && node.playable_duration_in_ms > 0) {
-            durationSec = Number((node.playable_duration_in_ms / 1000).toFixed(2));
-          }
-          if (durationSec == null && typeof node.length_in_second === "number" && node.length_in_second > 0) {
-            durationSec = Number(node.length_in_second);
-          }
-
-          // Creator & Caption from creation_story / short_form_video_context
-          if (!username && node.video_owner?.name) {
-            username = String(node.video_owner.name).trim();
-          } else if (!username && node.short_form_video_context?.video_owner?.name) {
-            username = String(node.short_form_video_context.video_owner.name).trim();
-          }
-
-          if (!caption && node.creation_story?.message?.text) {
-            caption = String(node.creation_story.message.text).trim();
-          } else if (!caption && node.short_form_video_context && node.message?.text) {
-            caption = String(node.message.text).trim();
-          }
-
-          if (likes == null && typeof node.unified_reactors?.count === "number") {
-            likes = node.unified_reactors.count;
-          } else if (likes == null && typeof node.likers?.count === "number") {
-            likes = node.likers.count;
-          }
-          if (comments == null && typeof node.total_comment_count === "number") {
-            comments = node.total_comment_count;
-          }
-          if (views == null && typeof node.play_count === "number" && node.play_count > 0) {
-            views = node.play_count;
-          }
-
-          for (const k of Object.keys(node)) {
-            walk(node[k]);
-          }
-        };
-
-        walk(parsedJson);
-      }
-    }
-  } catch (_) {}
-
-  // Fallback to local yt-dlp if Facebook ever changes its HTML script payload
-  if (!videoUrl && fs.existsSync("/opt/homebrew/bin/yt-dlp")) {
+  // 1. Direct Comet HTML JSON parse for standard Facebook Reels / Videos (Ads Library requires yt-dlp FacebookAds session handshake)
+  if (!isAdLibrary) {
     try {
-      const { stdout } = await execFileAsync(
-        "/opt/homebrew/bin/yt-dlp",
-        ["-J", "--no-playlist", "--no-warnings", targetUrl],
-        { timeout: 25000, maxBuffer: 15 * 1024 * 1024 }
-      );
+      const resp = await fetch(targetUrl, {
+        redirect: "follow",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Site": "none",
+        },
+      });
+      if (resp.url) {
+        const mFinal = resp.url.match(/\/reel\/(\d+)/i) || resp.url.match(/\/videos\/(\d+)/i);
+        if (mFinal) code = mFinal[1];
+      }
+      if (resp.ok) {
+        const html = await resp.text();
+        const scriptRe = /<script[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/gi;
+        let match;
+        while ((match = scriptRe.exec(html)) !== null) {
+          const txt = match[1] || "";
+          if (
+            !/(browser_native_|playable_url|progressive_url|hd_src|sd_src|dash_manifest|short_form_video_context|creation_story)/.test(
+              txt
+            )
+          ) {
+            continue;
+          }
+          let parsedJson;
+          try {
+            parsedJson = JSON.parse(txt);
+          } catch (_) {
+            continue;
+          }
+
+          const walk = (node) => {
+            if (!node || typeof node !== "object") return;
+            if (Array.isArray(node)) {
+              for (const item of node) walk(item);
+              return;
+            }
+
+            const nodeId = String(node.id || node.video_id || "");
+            const matchesTarget = !code || !nodeId || nodeId === code;
+
+            // Video & audio delivery fields
+            const hd =
+              node.browser_native_hd_url ||
+              node.playable_url_quality_hd ||
+              node.hd_src_no_ratelimit ||
+              node.hd_src ||
+              (Array.isArray(node.progressive_urls)
+                ? node.progressive_urls.find((p) => p?.metadata?.quality === "HD")?.progressive_url
+                : null);
+            const sd =
+              node.browser_native_sd_url ||
+              node.playable_url ||
+              node.sd_src_no_ratelimit ||
+              node.sd_src ||
+              (Array.isArray(node.progressive_urls)
+                ? node.progressive_urls.find((p) => p?.metadata?.quality === "SD")?.progressive_url ||
+                  node.progressive_urls.find((p) => p?.progressive_url)?.progressive_url
+                : null);
+
+            if ((hd || sd) && (!videoUrl || matchesTarget)) {
+              videoUrl = hd || sd || videoUrl;
+            }
+
+            const dashXml = node.dash_manifest_xml_string || node.dash_manifest || node.manifest_xml;
+            if (typeof dashXml === "string" && !audioUrl) {
+              const audioMatch = dashXml.match(
+                /<AdaptationSet[^>]*contentType="audio"[^>]*>[\s\S]*?<BaseURL>([^<]+)<\/BaseURL>/i
+              );
+              if (audioMatch?.[1]) {
+                audioUrl = audioMatch[1].replace(/&amp;/g, "&");
+              }
+            }
+
+            if (!thumbnailUrl) {
+              thumbnailUrl =
+                node.preferred_thumbnail?.image?.uri ||
+                node.thumbnailImage?.uri ||
+                node.first_frame_thumbnail ||
+                null;
+            }
+            if (durationSec == null && typeof node.playable_duration_in_ms === "number" && node.playable_duration_in_ms > 0) {
+              durationSec = Number((node.playable_duration_in_ms / 1000).toFixed(2));
+            }
+            if (durationSec == null && typeof node.length_in_second === "number" && node.length_in_second > 0) {
+              durationSec = Number(node.length_in_second);
+            }
+
+            // Creator & Caption from creation_story / short_form_video_context
+            if (!username && node.video_owner?.name) {
+              username = String(node.video_owner.name).trim();
+            } else if (!username && node.short_form_video_context?.video_owner?.name) {
+              username = String(node.short_form_video_context.video_owner.name).trim();
+            }
+
+            if (!caption && node.creation_story?.message?.text) {
+              caption = String(node.creation_story.message.text).trim();
+            } else if (!caption && node.short_form_video_context && node.message?.text) {
+              caption = String(node.message.text).trim();
+            }
+
+            if (likes == null && typeof node.unified_reactors?.count === "number") {
+              likes = node.unified_reactors.count;
+            } else if (likes == null && typeof node.likers?.count === "number") {
+              likes = node.likers.count;
+            }
+            if (comments == null && typeof node.total_comment_count === "number") {
+              comments = node.total_comment_count;
+            }
+            if (views == null && typeof node.play_count === "number" && node.play_count > 0) {
+              views = node.play_count;
+            }
+
+            for (const k of Object.keys(node)) {
+              walk(node[k]);
+            }
+          };
+
+          walk(parsedJson);
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 2. Local yt-dlp resolver (primary engine for Facebook Ads Library + fallback for Reels/Watch)
+  const ytdlpBin = resolveBin(
+    process.env.YTDLP_BIN,
+    ["/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp", "/usr/bin/yt-dlp"],
+    null
+  );
+  if (!videoUrl && ytdlpBin) {
+    try {
+      const ytdlpArgs = isAdLibrary
+        ? ["-J", "--playlist-end", "5", "--no-warnings", targetUrl]
+        : ["-J", "--no-playlist", "--no-warnings", targetUrl];
+      const { stdout } = await execFileAsync(ytdlpBin, ytdlpArgs, {
+        timeout: 30000,
+        maxBuffer: 20 * 1024 * 1024,
+      });
       const info = JSON.parse(stdout);
-      const formats = Array.isArray(info.formats) ? info.formats : [];
+      const item =
+        Array.isArray(info.entries) && info.entries.length > 0
+          ? info.entries.find((e) => e && (e.url || (Array.isArray(e.formats) && e.formats.length > 0))) ||
+            info.entries[0]
+          : info;
+      const formats = Array.isArray(item?.formats) ? item.formats : [];
       const progressive = formats
         .filter((f) => f.vcodec && f.vcodec !== "none" && f.acodec && f.acodec !== "none" && f.url)
         .sort((a, b) => (b.height || 0) - (a.height || 0));
-      videoUrl = progressive[0]?.url || info.url || null;
-      const audioOnly = formats.find((f) => f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none") && f.url);
+      const fbAdHd = formats.find((f) => String(f.format_id || "").toLowerCase().includes("hd") && f.url)?.url;
+      const fbAdMp4 = formats.find(
+        (f) => (f.ext === "mp4" || String(f.format_id || "").toLowerCase().includes("sd")) && f.url
+      )?.url;
+      videoUrl = progressive[0]?.url || fbAdHd || item?.url || fbAdMp4 || info.url || null;
+
+      const audioOnly = formats.find(
+        (f) => f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none") && f.url
+      );
       audioUrl = audioUrl || audioOnly?.url || videoUrl;
-      thumbnailUrl = thumbnailUrl || info.thumbnail || null;
-      username = username || info.uploader || info.channel || "";
-      caption = caption || info.description || info.title || "";
-      likes = likes ?? info.like_count ?? null;
-      comments = comments ?? info.comment_count ?? null;
-      views = views ?? info.view_count ?? null;
-      durationSec = durationSec ?? info.duration ?? null;
-      code = code || String(info.id || "");
+      thumbnailUrl = thumbnailUrl || item?.thumbnail || info.thumbnail || null;
+      username = username || item?.uploader || info.uploader || item?.channel || info.channel || "";
+
+      if (!caption) {
+        const desc = String(item?.description || info.description || "").trim();
+        const title = String(item?.title || info.title || "").trim();
+        if (
+          isAdLibrary &&
+          title &&
+          desc &&
+          !desc.toLowerCase().includes(title.toLowerCase()) &&
+          !/^facebook ad\b/i.test(title)
+        ) {
+          caption = `${desc}\n\nHeadline: ${title}`;
+        } else {
+          caption = desc || title || "";
+        }
+      }
+
+      likes = likes ?? item?.like_count ?? info.like_count ?? null;
+      comments = comments ?? item?.comment_count ?? info.comment_count ?? null;
+      views = views ?? item?.view_count ?? info.view_count ?? null;
+      durationSec = durationSec ?? item?.duration ?? info.duration ?? null;
+      code = code || String(info.id || item?.id || "").replace(/[^A-Za-z0-9_-]/g, "");
     } catch (_) {}
   }
 
   if (!videoUrl) {
     return {
       ok: false,
-      message: `Facebook did not return an MP4 stream for ${code || targetUrl}.`,
+      message: isAdLibrary
+        ? `Facebook Ads Library did not return a video stream for ad ${code || targetUrl} (make sure this ad contains a video creative).`
+        : `Facebook did not return an MP4 stream for ${code || targetUrl}.`,
     };
   }
 
   return {
     ok: true,
     platform: "facebook",
+    isAdLibrary,
+    kind: isAdLibrary ? "ad" : "reel",
     videoId: code,
     shortcode: code,
-    url: code ? `https://www.facebook.com/reel/${code}/` : targetUrl,
+    url:
+      isAdLibrary && code
+        ? `https://www.facebook.com/ads/library/?id=${code}`
+        : code
+        ? `https://www.facebook.com/reel/${code}/`
+        : targetUrl,
     videoUrl,
     audioUrl: audioUrl || videoUrl,
     thumbnailUrl,
@@ -1759,12 +1841,18 @@ async function reproduceVideoLocal(params = {}) {
   let platform = String(params.platform || parsed?.platform || "instagram").toLowerCase();
   let shortcode = String(params.shortcode || params.code || parsed?.shortcode || "").trim();
   let username = String(params.username || parsed?.username || "").replace(/^@/, "").trim();
+  const isAdLibrary =
+    Boolean(params.isAdLibrary || parsed?.isAdLibrary) ||
+    params.kind === "ad" ||
+    /facebook\.com\/ads\/library/i.test(String(params.url || parsed?.url || ""));
   let postUrl =
-    params.url ||
     parsed?.url ||
+    params.url ||
     (shortcode
       ? platform === "facebook"
-        ? `https://www.facebook.com/reel/${shortcode}/`
+        ? isAdLibrary
+          ? `https://www.facebook.com/ads/library/?id=${shortcode}`
+          : `https://www.facebook.com/reel/${shortcode}/`
         : `https://www.instagram.com/reel/${shortcode}/`
       : "");
   let videoUrl = params.videoUrl || null;
@@ -1850,7 +1938,7 @@ async function reproduceVideoLocal(params = {}) {
   if (!params.force) {
     const existing = reproduceDb.find((p) => p.packId === packId);
     if (existing && fs.existsSync(zipPath) && fs.existsSync(path.join(packFolder, "scenes.txt"))) {
-      if (!existing.caption && isExtensionConnected()) {
+      if (!existing.caption && (platform === "facebook" || isExtensionConnected())) {
         try {
           await fetchFreshMediaInfo();
           if (caption) {
@@ -2097,9 +2185,12 @@ async function reproduceVideoLocal(params = {}) {
   ];
   await fsp.writeFile(briefMdPath, briefLines.join("\n"), "utf8");
 
+  const packKind = isAdLibrary || /facebook\.com\/ads\/library/i.test(postUrl) ? "ad" : "reel";
   const packRecord = {
     packId,
     platform,
+    kind: packKind,
+    isAdLibrary: packKind === "ad",
     shortcode: safeCode,
     username,
     category: resolvedPackCategory,
@@ -2147,6 +2238,8 @@ async function reproduceVideoLocal(params = {}) {
     [
       {
         platform,
+        kind: packKind,
+        isAdLibrary: packKind === "ad",
         code: safeCode,
         shortcode: safeCode,
         username,
@@ -4495,11 +4588,19 @@ async function startLocalHub() {
 
     if (req.method === "POST" && pathname === "/api/visual-hook") {
       try {
-        const shortcode = extractShortcode(body.shortcode || body.postUrlOrShortcode) || body.shortcode || null;
+        const rawTarget = body.postUrlOrShortcode || body.url || body.shortcode || "";
+        const parsed = parseVideoTarget(rawTarget, body.platform || "instagram");
+        const platform = String(body.platform || parsed?.platform || "instagram").toLowerCase();
+        const shortcode = extractShortcode(rawTarget) || parsed?.shortcode || body.shortcode || null;
         let videoUrl = body.videoUrl || null;
         if (!videoUrl && shortcode) {
-          const info = await runExtensionJob({ kind: "media_info", shortcode }, 45000);
-          if (info?.ok && info.videoUrl) videoUrl = info.videoUrl;
+          if (platform === "facebook") {
+            const fb = await resolveFacebookReelDirect(rawTarget || parsed?.url || shortcode);
+            if (fb?.ok && fb.videoUrl) videoUrl = fb.videoUrl;
+          } else {
+            const info = await runExtensionJob({ kind: "media_info", platform, shortcode }, 45000);
+            if (info?.ok && info.videoUrl) videoUrl = info.videoUrl;
+          }
         }
         const out = await extractVisualHookLocal({ shortcode, videoUrl, force: !!body.force });
         return sendJson(res, 200, out);
@@ -4519,7 +4620,10 @@ async function startLocalHub() {
 
     if (req.method === "POST" && pathname === "/api/transcribe") {
       let mediaUrl = body.mediaUrl || null;
-      const shortcode = extractShortcode(body.cacheKey || body.shortcode || body.postUrlOrShortcode) || body.cacheKey || null;
+      const rawTarget = body.postUrlOrShortcode || body.url || body.shortcode || body.cacheKey || "";
+      const parsed = parseVideoTarget(rawTarget, body.platform || "instagram");
+      const platform = String(body.platform || parsed?.platform || "instagram").toLowerCase();
+      const shortcode = extractShortcode(rawTarget) || parsed?.shortcode || body.cacheKey || null;
       if (!mediaUrl && shortcode) {
         if (!body.force && transcriptCache[shortcode]?.transcription) {
           return sendJson(res, 200, {
@@ -4529,10 +4633,15 @@ async function startLocalHub() {
             ...enrichTranscriptMetrics(transcriptCache[shortcode]),
           });
         }
-        const info = await runExtensionJob({ kind: "media_info", shortcode }, 45000);
-        if (info?.ok) mediaUrl = info.audioUrl || info.videoUrl;
+        if (platform === "facebook") {
+          const fb = await resolveFacebookReelDirect(rawTarget || parsed?.url || shortcode);
+          if (fb?.ok) mediaUrl = fb.audioUrl || fb.videoUrl;
+        } else {
+          const info = await runExtensionJob({ kind: "media_info", platform, shortcode }, 45000);
+          if (info?.ok) mediaUrl = info.audioUrl || info.videoUrl;
+        }
       }
-      const out = await transcribeMediaLocal({ ...body, cacheKey: shortcode, mediaUrl });
+      const out = await transcribeMediaLocal({ ...body, platform, cacheKey: shortcode, mediaUrl });
       return sendJson(res, 200, out);
     }
 
@@ -5106,7 +5215,9 @@ function createViralSpyMcpServer() {
       language: z.string().default("auto"),
     },
     async ({ postUrlOrShortcode, mediaUrl, language = "auto" }) => {
-      const shortcode = extractShortcode(postUrlOrShortcode);
+      const parsed = parseVideoTarget(postUrlOrShortcode || "", "instagram");
+      const platform = parsed?.platform || "instagram";
+      const shortcode = extractShortcode(postUrlOrShortcode) || parsed?.shortcode || null;
       let resolvedUrl = mediaUrl || null;
       let meta = null;
       if (!resolvedUrl && shortcode) {
@@ -5124,12 +5235,21 @@ function createViralSpyMcpServer() {
             ],
           };
         }
-        const info = await runExtensionJob({ kind: "media_info", shortcode }, 45000);
-        if (!info?.ok) {
-          return { isError: true, content: [{ type: "text", text: `Could not resolve media for ${shortcode}: ${info?.error?.message}` }] };
+        if (platform === "facebook") {
+          const fb = await resolveFacebookReelDirect(postUrlOrShortcode || parsed?.url || shortcode);
+          if (!fb?.ok) {
+            return { isError: true, content: [{ type: "text", text: `Could not resolve Facebook media for ${shortcode}: ${fb?.message}` }] };
+          }
+          resolvedUrl = fb.audioUrl || fb.videoUrl;
+          meta = fb;
+        } else {
+          const info = await runExtensionJob({ kind: "media_info", platform, shortcode }, 45000);
+          if (!info?.ok) {
+            return { isError: true, content: [{ type: "text", text: `Could not resolve media for ${shortcode}: ${info?.error?.message}` }] };
+          }
+          resolvedUrl = info.audioUrl || info.videoUrl;
+          meta = info;
         }
-        resolvedUrl = info.audioUrl || info.videoUrl;
-        meta = info;
       }
       if (!resolvedUrl) {
         return { isError: true, content: [{ type: "text", text: "Provide postUrlOrShortcode or mediaUrl." }] };
@@ -5137,7 +5257,7 @@ function createViralSpyMcpServer() {
       const trans = await runTranscription({
         cacheKey: shortcode || null,
         mediaUrl: resolvedUrl,
-        platform: "instagram",
+        platform,
         profileName: meta?.username || "",
         language,
       });
